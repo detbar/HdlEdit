@@ -7,16 +7,28 @@ import hdledit.persistence.ProjectXmlSerializer;
 import javax.swing.*;
 import java.awt.*;
 import java.io.File;
+import java.util.prefs.Preferences;
 
 public class MainWindow extends JFrame {
 
     public static final String APP_NAME = "HdlEdit";
     public static final String APP_VERSION = "0.0.0";
 
+    private static final String PREF_LAST_PROJECT = "lastProjectPath";
+
     private final DesignBrowser designBrowser;
     private final JTextArea consoleArea;
     private Project currentProject;
+    private File currentProjectFile;          // merkt sich die aktuelle .hdp-Datei
     private final ProjectXmlSerializer serializer = new ProjectXmlSerializer();
+    private final Preferences prefs = Preferences.userNodeForPackage(MainWindow.class);
+
+    // Menüeinträge
+    private JMenuItem saveProjectItem;
+    private JMenuItem closeProjectItem;
+    private JMenuItem addBlockItem;
+    private JMenuItem addTableItem;
+    private JMenuItem addFlowItem;
 
     public MainWindow() {
         setTitle(APP_NAME + " " + APP_VERSION);
@@ -60,13 +72,19 @@ public class MainWindow extends JFrame {
         setJMenuBar(createMenuBar());
         add(verticalSplit, BorderLayout.CENTER);
 
-        log("HdlEdit gestartet.");
         setupMacOSAbout();
+        updateMenuState();
+
+        log(APP_NAME + " " + APP_VERSION + " gestartet.");
+
+        // Letztes Projekt automatisch laden
+        loadLastProject();
     }
 
     private JMenuBar createMenuBar() {
         JMenuBar menuBar = new JMenuBar();
 
+        // === Datei ===
         JMenu fileMenu = new JMenu("Datei");
 
         JMenuItem newProject = new JMenuItem("Neues Projekt...");
@@ -75,51 +93,64 @@ public class MainWindow extends JFrame {
         JMenuItem openProject = new JMenuItem("Projekt öffnen...");
         openProject.addActionListener(e -> openProject());
 
-        JMenuItem saveProject = new JMenuItem("Projekt speichern...");
-        saveProject.addActionListener(e -> saveProject());
+        saveProjectItem = new JMenuItem("Projekt speichern...");
+        saveProjectItem.addActionListener(e -> saveProject());
+
+        closeProjectItem = new JMenuItem("Projekt schließen");
+        closeProjectItem.addActionListener(e -> closeProject());
 
         JMenuItem exit = new JMenuItem("Beenden");
         exit.addActionListener(e -> System.exit(0));
 
         fileMenu.add(newProject);
         fileMenu.add(openProject);
-        fileMenu.add(saveProject);
+        fileMenu.add(saveProjectItem);
+        fileMenu.add(closeProjectItem);
         fileMenu.addSeparator();
         fileMenu.add(exit);
 
+        // === Diagramm ===
         JMenu diagramMenu = new JMenu("Diagramm");
 
-        JMenuItem addBlock = new JMenuItem("Blockdiagramm hinzufügen");
-        addBlock.addActionListener(e -> addDiagram(DiagramType.BLOCK_DIAGRAM));
+        addBlockItem = new JMenuItem("Blockdiagramm hinzufügen");
+        addBlockItem.addActionListener(e -> addDiagram(DiagramType.BLOCK_DIAGRAM));
 
-        JMenuItem addTable = new JMenuItem("Tabelle hinzufügen");
-        addTable.addActionListener(e -> addDiagram(DiagramType.TABLE));
+        addTableItem = new JMenuItem("Tabelle hinzufügen");
+        addTableItem.addActionListener(e -> addDiagram(DiagramType.TABLE));
 
-        JMenuItem addFlow = new JMenuItem("Flussdiagramm hinzufügen");
-        addFlow.addActionListener(e -> addDiagram(DiagramType.FLOWCHART));
+        addFlowItem = new JMenuItem("Flussdiagramm hinzufügen");
+        addFlowItem.addActionListener(e -> addDiagram(DiagramType.FLOWCHART));
 
-        diagramMenu.add(addBlock);
-        diagramMenu.add(addTable);
-        diagramMenu.add(addFlow);
+        diagramMenu.add(addBlockItem);
+        diagramMenu.add(addTableItem);
+        diagramMenu.add(addFlowItem);
 
         menuBar.add(fileMenu);
         menuBar.add(diagramMenu);
-        JMenu helpMenu = new JMenu("Hilfe");
-        JMenuItem aboutItem = new JMenuItem("About HdlEdit...");
-        aboutItem.addActionListener(e -> {
-            AboutDialog about = new AboutDialog(this);
-            about.setVisible(true);
-        });
+
+        // Hilfe nur unter Windows/Linux
         if (!System.getProperty("os.name").toLowerCase().contains("mac")) {
-            helpMenu = new JMenu("Hilfe");
-            aboutItem = new JMenuItem("About HdlEdit...");
+            JMenu helpMenu = new JMenu("Hilfe");
+            JMenuItem aboutItem = new JMenuItem("About HdlEdit...");
             aboutItem.addActionListener(e -> {
                 AboutDialog about = new AboutDialog(this);
                 about.setVisible(true);
             });
             helpMenu.add(aboutItem);
             menuBar.add(helpMenu);
-        }        return menuBar;
+        }
+
+        return menuBar;
+    }
+
+    private void updateMenuState() {
+        boolean hasProject = currentProject != null;
+
+        saveProjectItem.setEnabled(hasProject);
+        closeProjectItem.setEnabled(hasProject);
+        addBlockItem.setEnabled(hasProject);
+        addTableItem.setEnabled(hasProject);
+        addFlowItem.setEnabled(hasProject);
     }
 
     private void createNewProject() {
@@ -129,7 +160,10 @@ public class MainWindow extends JFrame {
         Project project = dialog.getResult();
         if (project != null) {
             currentProject = project;
+            currentProjectFile = new File(project.getProjectDirectory(), project.getName() + ".hdp");
             designBrowser.setProject(currentProject);
+            updateMenuState();
+            saveLastProjectPath(currentProjectFile.getAbsolutePath());
             log("Neues Projekt erstellt: " + project.getName());
             log("Verzeichnis: " + project.getProjectDirectory());
         }
@@ -139,42 +173,67 @@ public class MainWindow extends JFrame {
         JFileChooser fc = new JFileChooser();
         fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("HdlEdit Projekt (*.hdp)", "hdp"));
         if (fc.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
-            try {
-                currentProject = serializer.load(fc.getSelectedFile());
-                designBrowser.setProject(currentProject);
-                log("Projekt geladen: " + currentProject.getName());
-            } catch (Exception ex) {
-                showError("Fehler beim Laden", ex.getMessage());
-                log("FEHLER beim Laden: " + ex.getMessage());
-            }
+            openProjectFile(fc.getSelectedFile());
+        }
+    }
+
+    private void openProjectFile(File file) {
+        try {
+            currentProject = serializer.load(file);
+            currentProjectFile = file;
+            designBrowser.setProject(currentProject);
+            updateMenuState();
+            saveLastProjectPath(file.getAbsolutePath());
+            log("Projekt geladen: " + currentProject.getName());
+        } catch (Exception ex) {
+            showError("Fehler beim Laden", ex.getMessage());
+            log("FEHLER beim Laden: " + ex.getMessage());
         }
     }
 
     private void saveProject() {
-        if (currentProject == null) {
-            showError("Kein Projekt", "Es ist kein Projekt geladen.");
-            return;
-        }
+        if (currentProject == null || currentProjectFile == null) return;
 
-        JFileChooser fc = new JFileChooser();
-        fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("HdlEdit Projekt (*.hdp)", "hdp"));
-        fc.setSelectedFile(new File(currentProject.getName() + ".hdp"));
-        if (fc.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
-            try {
-                serializer.save(currentProject, fc.getSelectedFile());
-                log("Projekt gespeichert: " + fc.getSelectedFile().getAbsolutePath());
-            } catch (Exception ex) {
-                showError("Fehler beim Speichern", ex.getMessage());
-                log("FEHLER beim Speichern: " + ex.getMessage());
+        try {
+            serializer.save(currentProject, currentProjectFile);
+            log("Projekt gespeichert: " + currentProjectFile.getAbsolutePath());
+        } catch (Exception ex) {
+            showError("Fehler beim Speichern", ex.getMessage());
+            log("FEHLER beim Speichern: " + ex.getMessage());
+        }
+    }
+
+    private void closeProject() {
+        currentProject = null;
+        currentProjectFile = null;
+        designBrowser.setProject(null);
+        updateMenuState();
+        clearLastProjectPath();
+        log("Projekt geschlossen.");
+    }
+
+    private void loadLastProject() {
+        String path = prefs.get(PREF_LAST_PROJECT, null);
+        if (path != null) {
+            File file = new File(path);
+            if (file.exists()) {
+                openProjectFile(file);
+            } else {
+                clearLastProjectPath();
             }
         }
     }
 
+    private void saveLastProjectPath(String path) {
+        prefs.put(PREF_LAST_PROJECT, path);
+    }
+
+    private void clearLastProjectPath() {
+        prefs.remove(PREF_LAST_PROJECT);
+    }
+
     private void addDiagram(DiagramType type) {
-        if (currentProject == null) {
-            showError("Kein Projekt", "Bitte zuerst ein Projekt anlegen oder öffnen.");
-            return;
-        }
+        if (currentProject == null) return;
 
         String name = JOptionPane.showInputDialog(this, "Name des Diagramms:", "Diagramm hinzufügen", JOptionPane.PLAIN_MESSAGE);
         if (name != null && !name.isBlank()) {
@@ -187,15 +246,6 @@ public class MainWindow extends JFrame {
             designBrowser.refresh();
             log("Diagramm hinzugefügt: " + name + " (" + type + ")");
         }
-    }
-
-    public void log(String message) {
-        consoleArea.append("> " + message + "\n");
-        consoleArea.setCaretPosition(consoleArea.getDocument().getLength());
-    }
-
-    private void showError(String title, String message) {
-        JOptionPane.showMessageDialog(this, message, title, JOptionPane.ERROR_MESSAGE);
     }
 
     private void setupMacOSAbout() {
@@ -214,8 +264,16 @@ public class MainWindow extends JFrame {
         }
     }
 
+    public void log(String message) {
+        consoleArea.append("> " + message + "\n");
+        consoleArea.setCaretPosition(consoleArea.getDocument().getLength());
+    }
+
+    private void showError(String title, String message) {
+        JOptionPane.showMessageDialog(this, message, title, JOptionPane.ERROR_MESSAGE);
+    }
+
     public static void main(String[] args) {
-        // macOS: Name neben dem Apfel
         System.setProperty("apple.awt.application.name", APP_NAME);
 
         try {

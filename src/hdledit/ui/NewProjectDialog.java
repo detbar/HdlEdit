@@ -2,6 +2,7 @@
 package hdledit.ui;
 
 import hdledit.model.Project;
+import hdledit.persistence.ProjectXmlSerializer;
 
 import javax.swing.*;
 import java.awt.*;
@@ -19,7 +20,7 @@ public class NewProjectDialog extends JDialog {
     private Project result = null;
 
     public NewProjectDialog(Frame owner) {
-        super(owner, "Neues Projekt – HDLEdit", true);
+        super(owner, "Neues Projekt – HdlEdit", true);
         setLayout(new BorderLayout(10, 10));
         ((JPanel) getContentPane()).setBorder(BorderFactory.createEmptyBorder(15, 15, 15, 15));
 
@@ -95,6 +96,18 @@ public class NewProjectDialog extends JDialog {
     private void browseDirectory() {
         JFileChooser fc = new JFileChooser();
         fc.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+        fc.setDialogTitle("Projektverzeichnis wählen");
+
+        String current = directoryField.getText().trim();
+        if (!current.isEmpty()) {
+            File currentDir = new File(current);
+            if (currentDir.exists()) {
+                fc.setCurrentDirectory(currentDir);
+            } else if (currentDir.getParentFile() != null && currentDir.getParentFile().exists()) {
+                fc.setCurrentDirectory(currentDir.getParentFile());
+            }
+        }
+
         if (fc.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
             directoryField.setText(fc.getSelectedFile().getAbsolutePath());
         }
@@ -107,18 +120,58 @@ public class NewProjectDialog extends JDialog {
             return;
         }
 
-        String dir = directoryField.getText().trim();
-        if (dir.isEmpty()) {
+        String dirPath = directoryField.getText().trim();
+        if (dirPath.isEmpty()) {
             JOptionPane.showMessageDialog(this, "Project Directory ist Pflicht.", "Fehler", JOptionPane.ERROR_MESSAGE);
             return;
+        }
+
+        File projectDir = new File(dirPath);
+
+        if (!projectDir.exists()) {
+            if (!projectDir.mkdirs()) {
+                JOptionPane.showMessageDialog(this,
+                        "Das Projektverzeichnis konnte nicht erstellt werden:\n" + dirPath,
+                        "Fehler", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+        } else if (!projectDir.isDirectory()) {
+            JOptionPane.showMessageDialog(this,
+                    "Der angegebene Pfad ist kein Verzeichnis:\n" + dirPath,
+                    "Fehler", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        File projectFile = new File(projectDir, name + ".hdp");
+
+        if (projectFile.exists()) {
+            int choice = JOptionPane.showConfirmDialog(this,
+                    "Die Projektdatei existiert bereits:\n" + projectFile.getAbsolutePath() +
+                            "\n\nMöchten Sie sie überschreiben?",
+                    "Datei überschreiben?",
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.WARNING_MESSAGE);
+
+            if (choice != JOptionPane.YES_OPTION) {
+                return;
+            }
         }
 
         result = new Project(name);
         result.setDescription(descriptionArea.getText().trim());
         result.setAuthor(authorField.getText().trim());
         result.setVersion(versionField.getText().trim());
-        result.setProjectDirectory(dir);
+        result.setProjectDirectory(projectDir.getAbsolutePath());
         result.setDefaultLibrary(libraryField.getText().trim());
+
+        try {
+            new ProjectXmlSerializer().save(result, projectFile);
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(this,
+                    "Projektverzeichnis wurde erstellt, aber die Projektdatei konnte nicht geschrieben werden:\n"
+                            + ex.getMessage(),
+                    "Warnung", JOptionPane.WARNING_MESSAGE);
+        }
 
         dispose();
     }
