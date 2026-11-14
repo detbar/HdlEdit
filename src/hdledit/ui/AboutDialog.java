@@ -1,6 +1,8 @@
 // src/main/java/hdledit/ui/AboutDialog.java
 package hdledit.ui;
 
+import hdledit.util.GitInfo;
+
 import javax.swing.*;
 import java.awt.*;
 
@@ -15,7 +17,6 @@ public class AboutDialog extends JDialog {
         JLabel logoLabel = new JLabel();
         try {
             ImageIcon icon = new ImageIcon(getClass().getResource("/hdledit/resources/HdlEditLogo.png"));
-            // Optional etwas skalieren, falls das Logo zu groß ist
             Image scaled = icon.getImage().getScaledInstance(180, 100, Image.SCALE_SMOOTH);
             logoLabel.setIcon(new ImageIcon(scaled));
         } catch (Exception e) {
@@ -27,7 +28,8 @@ public class AboutDialog extends JDialog {
         JLabel title = new JLabel("HdlEdit", SwingConstants.CENTER);
         title.setFont(title.getFont().deriveFont(Font.BOLD, 22f));
 
-        JLabel version = new JLabel("Version " + MainWindow.APP_VERSION, SwingConstants.CENTER);
+        String versionText = "Version " + MainWindow.APP_VERSION + " (GIT: " + GitInfo.getVersionSuffix() + ")";
+        JLabel version = new JLabel(versionText, SwingConstants.CENTER);
         version.setFont(version.getFont().deriveFont(14f));
 
         JLabel description = new JLabel(
@@ -43,14 +45,12 @@ public class AboutDialog extends JDialog {
         textPanel.add(Box.createVerticalStrut(12));
         textPanel.add(description);
 
-        // Zusammenbauen
         JPanel center = new JPanel(new BorderLayout(10, 15));
         center.add(logoLabel, BorderLayout.NORTH);
         center.add(textPanel, BorderLayout.CENTER);
 
         add(center, BorderLayout.CENTER);
 
-        // Schließen-Button
         JButton close = new JButton("Schließen");
         close.addActionListener(e -> dispose());
         JPanel buttonPanel = new JPanel();
