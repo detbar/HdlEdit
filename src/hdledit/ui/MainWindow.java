@@ -10,13 +10,16 @@ import java.io.File;
 
 public class MainWindow extends JFrame {
 
+    public static final String APP_NAME = "HdlEdit";
+    public static final String APP_VERSION = "0.0.0";
+
     private final DesignBrowser designBrowser;
     private final JTextArea consoleArea;
     private Project currentProject;
     private final ProjectXmlSerializer serializer = new ProjectXmlSerializer();
 
     public MainWindow() {
-        setTitle("HdlEdit");
+        setTitle(APP_NAME + " " + APP_VERSION);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setSize(1280, 840);
         setLocationRelativeTo(null);
@@ -58,6 +61,7 @@ public class MainWindow extends JFrame {
         add(verticalSplit, BorderLayout.CENTER);
 
         log("HdlEdit gestartet.");
+        setupMacOSAbout();
     }
 
     private JMenuBar createMenuBar() {
@@ -100,7 +104,22 @@ public class MainWindow extends JFrame {
 
         menuBar.add(fileMenu);
         menuBar.add(diagramMenu);
-        return menuBar;
+        JMenu helpMenu = new JMenu("Hilfe");
+        JMenuItem aboutItem = new JMenuItem("About HdlEdit...");
+        aboutItem.addActionListener(e -> {
+            AboutDialog about = new AboutDialog(this);
+            about.setVisible(true);
+        });
+        if (!System.getProperty("os.name").toLowerCase().contains("mac")) {
+            helpMenu = new JMenu("Hilfe");
+            aboutItem = new JMenuItem("About HdlEdit...");
+            aboutItem.addActionListener(e -> {
+                AboutDialog about = new AboutDialog(this);
+                about.setVisible(true);
+            });
+            helpMenu.add(aboutItem);
+            menuBar.add(helpMenu);
+        }        return menuBar;
     }
 
     private void createNewProject() {
@@ -179,7 +198,26 @@ public class MainWindow extends JFrame {
         JOptionPane.showMessageDialog(this, message, title, JOptionPane.ERROR_MESSAGE);
     }
 
+    private void setupMacOSAbout() {
+        if (!System.getProperty("os.name").toLowerCase().contains("mac")) {
+            return;
+        }
+
+        if (Desktop.isDesktopSupported()) {
+            Desktop desktop = Desktop.getDesktop();
+            if (desktop.isSupported(Desktop.Action.APP_ABOUT)) {
+                desktop.setAboutHandler(e -> {
+                    AboutDialog about = new AboutDialog(this);
+                    about.setVisible(true);
+                });
+            }
+        }
+    }
+
     public static void main(String[] args) {
+        // macOS: Name neben dem Apfel
+        System.setProperty("apple.awt.application.name", APP_NAME);
+
         try {
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
         } catch (Exception ignored) {}
