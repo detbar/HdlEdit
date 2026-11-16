@@ -5,6 +5,8 @@ import hdledit.model.*;
 import hdledit.persistence.ProjectXmlSerializer;
 
 import javax.swing.*;
+import javax.swing.event.TreeSelectionEvent;
+import javax.swing.event.TreeSelectionListener;
 import java.awt.*;
 import java.io.File;
 import java.util.prefs.Preferences;
@@ -12,14 +14,20 @@ import java.util.prefs.Preferences;
 public class MainWindow extends JFrame {
 
     public static final String APP_NAME = "HdlEdit";
-    public static final String APP_VERSION = "0.0.0";
+    public static final String APP_VERSION = "0.0.4";
 
     private static final String PREF_LAST_PROJECT = "lastProjectPath";
 
     private final DesignBrowser designBrowser;
     private final JTextArea consoleArea;
+    private final BlockDiagramEditor blockDiagramEditor;
+    private final JPanel editorContainer;
+    private final JLabel editorPlaceholder;
+
     private Project currentProject;
-    private File currentProjectFile;          // merkt sich die aktuelle .hdp-Datei
+    private File currentProjectFile;
+    private Diagram currentlyShownDiagram = null;
+
     private final ProjectXmlSerializer serializer = new ProjectXmlSerializer();
     private final Preferences prefs = Preferences.userNodeForPackage(MainWindow.class);
 
@@ -29,6 +37,9 @@ public class MainWindow extends JFrame {
     private JMenuItem addBlockItem;
     private JMenuItem addTableItem;
     private JMenuItem addFlowItem;
+    private JButton toolbarSaveButton;
+    private JButton toolbarCloseButton;
+    private JButton toolbarAddBlockButton;
 
     public MainWindow() {
         setTitle(APP_NAME + " " + APP_VERSION);
@@ -37,10 +48,17 @@ public class MainWindow extends JFrame {
         setLocationRelativeTo(null);
 
         designBrowser = new DesignBrowser();
+        blockDiagramEditor = new BlockDiagramEditor();
 
-        JLabel editorPlaceholder = new JLabel("Editor-Bereich (noch leer)", SwingConstants.CENTER);
+        // Dirty-Callback: nur den Tree aktualisieren (Stern)
+        blockDiagramEditor.setOnChangeCallback(() -> designBrowser.refresh());
+
+        editorPlaceholder = new JLabel("Editor-Bereich (noch leer)", SwingConstants.CENTER);
         editorPlaceholder.setFont(editorPlaceholder.getFont().deriveFont(16f));
         editorPlaceholder.setForeground(Color.GRAY);
+
+        editorContainer = new JPanel(new BorderLayout());
+        editorContainer.add(editorPlaceholder, BorderLayout.CENTER);
 
         consoleArea = new JTextArea();
         consoleArea.setEditable(false);
@@ -54,7 +72,7 @@ public class MainWindow extends JFrame {
         JSplitPane horizontalSplit = new JSplitPane(
                 JSplitPane.HORIZONTAL_SPLIT,
                 new JScrollPane(designBrowser),
-                editorPlaceholder
+                editorContainer
         );
         horizontalSplit.setDividerLocation(280);
         horizontalSplit.setResizeWeight(0.22);
@@ -70,15 +88,89 @@ public class MainWindow extends JFrame {
         verticalSplit.setOneTouchExpandable(true);
 
         setJMenuBar(createMenuBar());
+        add(createToolbar(), BorderLayout.NORTH);
         add(verticalSplit, BorderLayout.CENTER);
+
+        // Selection Listener
+        designBrowser.addTreeSelectionListener(new TreeSelectionListener() {
+            @Override
+            public void valueChanged(TreeSelectionEvent e) {
+                onDiagramSelected();
+            }
+        });
 
         setupMacOSAbout();
         updateMenuState();
 
         log(APP_NAME + " " + APP_VERSION + " gestartet.");
-
-        // Letztes Projekt automatisch laden
         loadLastProject();
+    }
+
+    private JToolBar createToolbar() {
+        JToolBar toolbar = new JToolBar();
+        toolbar.setFloatable(false);
+        toolbar.setRollover(true);
+
+        JButton newBtn = new JButton(ToolbarIcons.NEW_PROJECT);
+        newBtn.setToolTipText("Neues Projekt");
+        newBtn.addActionListener(e -> createNewProject());
+        toolbar.add(newBtn);
+
+        JButton openBtn = new JButton(ToolbarIcons.OPEN_PROJECT);
+        openBtn.setToolTipText("Projekt öffnen");
+        openBtn.addActionListener(e -> openProject());
+        toolbar.add(openBtn);
+
+        JButton saveBtn = new JButton(ToolbarIcons.SAVE_PROJECT);
+        saveBtn.setToolTipText("Projekt speichern");
+        saveBtn.addActionListener(e -> saveProject());
+        toolbar.add(saveBtn);
+
+        JButton closeBtn = new JButton(ToolbarIcons.CLOSE_PROJECT);
+        closeBtn.setToolTipText("Projekt schließen");
+        closeBtn.addActionListener(e -> closeProject());
+        toolbar.add(closeBtn);
+
+        toolbar.addSeparator();
+
+        JButton addBlockBtn = new JButton(ToolbarIcons.ADD_BLOCK);
+        addBlockBtn.setToolTipText("Blockdiagramm hinzufügen");
+        addBlockBtn.addActionListener(e -> addDiagram(DiagramType.BLOCK_DIAGRAM));
+        toolbar.add(addBlockBtn);
+
+        // Referenz speichern, damit wir sie enablen/disablen können
+        this.toolbarSaveButton = saveBtn;
+        this.toolbarCloseButton = closeBtn;
+        this.toolbarAddBlockButton = addBlockBtn;
+
+        return toolbar;
+    }
+
+    private void onDiagramSelected() {
+        Diagram selected = designBrowser.getSelectedDiagram();
+
+        // Über ID vergleichen (robuster als Referenz-Vergleich)
+        String selectedId = (selected != null) ? selected.getId() : null;
+        String currentId  = (currentlyShownDiagram != null) ? currentlyShownDiagram.getId() : null;
+
+        if (java.util.Objects.equals(selectedId, currentId)) {
+            return; // gleiches Diagramm → nichts tun
+        }
+
+        currentlyShownDiagram = selected;
+
+        editorContainer.removeAll();
+
+        if (selected instanceof BlockDiagram blockDiagram) {
+            blockDiagramEditor.setDiagram(blockDiagram);
+            editorContainer.add(blockDiagramEditor, BorderLayout.CENTER);
+            log("Blockdiagramm geöffnet: " + blockDiagram.getName());
+        } else {
+            editorContainer.add(editorPlaceholder, BorderLayout.CENTER);
+        }
+
+        editorContainer.revalidate();
+        editorContainer.repaint();
     }
 
     private JMenuBar createMenuBar() {
@@ -151,6 +243,12 @@ public class MainWindow extends JFrame {
         addBlockItem.setEnabled(hasProject);
         addTableItem.setEnabled(hasProject);
         addFlowItem.setEnabled(hasProject);
+
+        if (toolbarSaveButton != null) {
+            toolbarSaveButton.setEnabled(hasProject);
+            toolbarCloseButton.setEnabled(hasProject);
+            toolbarAddBlockButton.setEnabled(hasProject);
+        }
     }
 
     private void createNewProject() {
@@ -164,8 +262,9 @@ public class MainWindow extends JFrame {
             designBrowser.setProject(currentProject);
             updateMenuState();
             saveLastProjectPath(currentProjectFile.getAbsolutePath());
+            currentlyShownDiagram = null;
+            onDiagramSelected();
             log("Neues Projekt erstellt: " + project.getName());
-            log("Verzeichnis: " + project.getProjectDirectory());
         }
     }
 
@@ -184,6 +283,8 @@ public class MainWindow extends JFrame {
             designBrowser.setProject(currentProject);
             updateMenuState();
             saveLastProjectPath(file.getAbsolutePath());
+            currentlyShownDiagram = null;
+            onDiagramSelected();
             log("Projekt geladen: " + currentProject.getName());
         } catch (Exception ex) {
             showError("Fehler beim Laden", ex.getMessage());
@@ -196,6 +297,13 @@ public class MainWindow extends JFrame {
 
         try {
             serializer.save(currentProject, currentProjectFile);
+
+            // Alle Diagramme als sauber markieren
+            for (Diagram d : currentProject.getDiagrams()) {
+                d.setDirty(false);
+            }
+            designBrowser.refresh();
+
             log("Projekt gespeichert: " + currentProjectFile.getAbsolutePath());
         } catch (Exception ex) {
             showError("Fehler beim Speichern", ex.getMessage());
@@ -206,9 +314,11 @@ public class MainWindow extends JFrame {
     private void closeProject() {
         currentProject = null;
         currentProjectFile = null;
+        currentlyShownDiagram = null;
         designBrowser.setProject(null);
         updateMenuState();
         clearLastProjectPath();
+        onDiagramSelected();
         log("Projekt geschlossen.");
     }
 

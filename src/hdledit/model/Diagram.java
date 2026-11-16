@@ -8,6 +8,7 @@ public abstract class Diagram {
     private final String id;
     private String name;
     private final DiagramType type;
+    private boolean dirty = false;
 
     public Diagram(String name, DiagramType type) {
         this.id = UUID.randomUUID().toString();
@@ -25,4 +26,12 @@ public abstract class Diagram {
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
     public DiagramType getType() { return type; }
+
+    public boolean isDirty() { return dirty; }
+    public void setDirty(boolean dirty) { this.dirty = dirty; }
+
+    @Override
+    public String toString() {
+        return dirty ? name + " *" : name;
+    }
 }

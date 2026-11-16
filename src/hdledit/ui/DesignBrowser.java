@@ -5,8 +5,10 @@ import hdledit.model.Diagram;
 import hdledit.model.Project;
 
 import javax.swing.*;
+import javax.swing.event.TreeSelectionListener;
 import javax.swing.tree.DefaultMutableTreeNode;
 import javax.swing.tree.DefaultTreeModel;
+import javax.swing.tree.TreePath;
 import javax.swing.tree.TreeSelectionModel;
 
 public class DesignBrowser extends JTree {
@@ -30,7 +32,18 @@ public class DesignBrowser extends JTree {
     }
 
     public void refresh() {
+        // Aktuell ausgewähltes Diagramm merken
+        Diagram previouslySelected = getSelectedDiagram();
+
+        // Listener temporär entfernen, damit beim Neuaufbau nichts feuert
+        TreeSelectionListener[] listeners = getTreeSelectionListeners();
+        for (TreeSelectionListener l : listeners) {
+            removeTreeSelectionListener(l);
+        }
+
         rootNode.removeAllChildren();
+
+        DefaultMutableTreeNode nodeToSelect = null;
 
         if (project == null) {
             rootNode.setUserObject("Kein Projekt geladen");
@@ -38,19 +51,28 @@ public class DesignBrowser extends JTree {
             rootNode.setUserObject(project.getName());
 
             for (Diagram diagram : project.getDiagrams()) {
-                String prefix = switch (diagram.getType()) {
-                    case BLOCK_DIAGRAM -> "[Block] ";
-                    case TABLE        -> "[Tabelle] ";
-                    case FLOWCHART    -> "[Fluss] ";
-                };
-                DefaultMutableTreeNode node = new DefaultMutableTreeNode(prefix + diagram.getName());
-                node.setUserObject(diagram);
+                DefaultMutableTreeNode node = new DefaultMutableTreeNode(diagram);
                 rootNode.add(node);
+
+                if (previouslySelected != null && previouslySelected.getId().equals(diagram.getId())) {
+                    nodeToSelect = node;
+                }
             }
         }
 
         treeModel.reload();
         expandRow(0);
+
+        // Auswahl wiederherstellen
+        if (nodeToSelect != null) {
+            TreePath path = new TreePath(nodeToSelect.getPath());
+            setSelectionPath(path);
+        }
+
+        // Listener wieder anhängen
+        for (TreeSelectionListener l : listeners) {
+            addTreeSelectionListener(l);
+        }
     }
 
     public Project getProject() {

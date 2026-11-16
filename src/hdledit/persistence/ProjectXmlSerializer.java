@@ -38,6 +38,35 @@ public class ProjectXmlSerializer {
             diagEl.setAttribute("name", d.getName());
             diagEl.setAttribute("type", d.getType().name());
             diagramsEl.appendChild(diagEl);
+
+            if (d instanceof BlockDiagram blockDiagram) {
+                // Blöcke
+                Element blocksEl = doc.createElement("blocks");
+                diagEl.appendChild(blocksEl);
+
+                for (Block block : blockDiagram.getBlocks()) {
+                    Element blockEl = doc.createElement("block");
+                    blockEl.setAttribute("id", block.getId());
+                    blockEl.setAttribute("name", block.getName());
+                    blockEl.setAttribute("x", String.valueOf(block.getX()));
+                    blockEl.setAttribute("y", String.valueOf(block.getY()));
+                    blockEl.setAttribute("width", String.valueOf(block.getWidth()));
+                    blockEl.setAttribute("height", String.valueOf(block.getHeight()));
+                    blocksEl.appendChild(blockEl);
+                }
+
+                // Verbindungen
+                Element connsEl = doc.createElement("connections");
+                diagEl.appendChild(connsEl);
+
+                for (Connection conn : blockDiagram.getConnections()) {
+                    Element connEl = doc.createElement("connection");
+                    connEl.setAttribute("id", conn.getId());
+                    connEl.setAttribute("from", conn.getFrom().getId());
+                    connEl.setAttribute("to", conn.getTo().getId());
+                    connsEl.appendChild(connEl);
+                }
+            }
         }
 
         Transformer transformer = TransformerFactory.newInstance().newTransformer();
@@ -70,7 +99,39 @@ public class ProjectXmlSerializer {
             DiagramType type = DiagramType.valueOf(el.getAttribute("type"));
 
             Diagram diagram = switch (type) {
-                case BLOCK_DIAGRAM -> new BlockDiagram(id, name);
+                case BLOCK_DIAGRAM -> {
+                    BlockDiagram bd = new BlockDiagram(id, name);
+
+                    // Blöcke laden
+                    java.util.Map<String, Block> blockMap = new java.util.HashMap<>();
+                    NodeList blockNodes = el.getElementsByTagName("block");
+                    for (int j = 0; j < blockNodes.getLength(); j++) {
+                        Element be = (Element) blockNodes.item(j);
+                        Block block = new Block(
+                                be.getAttribute("id"),
+                                be.getAttribute("name"),
+                                Integer.parseInt(be.getAttribute("x")),
+                                Integer.parseInt(be.getAttribute("y")),
+                                Integer.parseInt(be.getAttribute("width")),
+                                Integer.parseInt(be.getAttribute("height"))
+                        );
+                        bd.addBlock(block);
+                        blockMap.put(block.getId(), block);
+                    }
+
+                    // Verbindungen laden
+                    NodeList connNodes = el.getElementsByTagName("connection");
+                    for (int k = 0; k < connNodes.getLength(); k++) {
+                        Element ce = (Element) connNodes.item(k);
+                        Block from = blockMap.get(ce.getAttribute("from"));
+                        Block to = blockMap.get(ce.getAttribute("to"));
+                        if (from != null && to != null) {
+                            bd.addConnection(new Connection(ce.getAttribute("id"), from, to));
+                        }
+                    }
+
+                    yield bd;
+                }
                 case TABLE -> new TableDiagram(id, name);
                 case FLOWCHART -> new Flowchart(id, name);
             };
