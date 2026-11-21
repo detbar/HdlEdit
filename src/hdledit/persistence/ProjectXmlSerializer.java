@@ -60,6 +60,7 @@ public class ProjectXmlSerializer {
                 diagEl.appendChild(connsEl);
 
                 for (Connection conn : blockDiagram.getConnections()) {
+                    conn.ensureSegmentCount();
                     Element connEl = doc.createElement("connection");
                     connEl.setAttribute("id", conn.getId());
                     connEl.setAttribute("from", conn.getFrom().getId());
@@ -81,6 +82,20 @@ public class ProjectXmlSerializer {
                             wpEl.setAttribute("y", String.valueOf(wp[1]));
                             wpsEl.appendChild(wpEl);
                         }
+                    }
+
+                    Element segsEl = doc.createElement("segments");
+                    connEl.appendChild(segsEl);
+                    for (SegmentData seg : conn.getSegments()) {
+                        Element segEl = doc.createElement("segment");
+                        segEl.setAttribute("kind", seg.getKind().name());
+                        if (seg.hasControls()) {
+                            segEl.setAttribute("c1x", String.valueOf(seg.getC1x()));
+                            segEl.setAttribute("c1y", String.valueOf(seg.getC1y()));
+                            segEl.setAttribute("c2x", String.valueOf(seg.getC2x()));
+                            segEl.setAttribute("c2y", String.valueOf(seg.getC2y()));
+                        }
+                        segsEl.appendChild(segEl);
                     }
 
                     connsEl.appendChild(connEl);
@@ -171,8 +186,29 @@ public class ProjectXmlSerializer {
                                 });
                             }
 
+                            List<SegmentData> segments = new ArrayList<>();
+                            NodeList segNodes = ce.getElementsByTagName("segment");
+                            for (int s = 0; s < segNodes.getLength(); s++) {
+                                Element se = (Element) segNodes.item(s);
+                                SegmentData.Kind kind = SegmentData.Kind.LINE;
+                                try {
+                                    kind = SegmentData.Kind.valueOf(se.getAttribute("kind"));
+                                } catch (Exception ignored) {}
+                                Integer c1x = null, c1y = null, c2x = null, c2y = null;
+                                try {
+                                    if (se.hasAttribute("c1x")) {
+                                        c1x = Integer.parseInt(se.getAttribute("c1x"));
+                                        c1y = Integer.parseInt(se.getAttribute("c1y"));
+                                        c2x = Integer.parseInt(se.getAttribute("c2x"));
+                                        c2y = Integer.parseInt(se.getAttribute("c2y"));
+                                    }
+                                } catch (Exception ignored) {}
+                                segments.add(new SegmentData(kind, c1x, c1y, c2x, c2y));
+                            }
+
                             bd.addConnection(new Connection(
-                                    ce.getAttribute("id"), from, to, style, fromSide, toSide, waypoints));
+                                    ce.getAttribute("id"), from, to, style,
+                                    fromSide, toSide, waypoints, segments));
                         }
                     }
 
