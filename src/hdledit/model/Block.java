@@ -5,6 +5,10 @@ import java.util.UUID;
 
 public class Block {
 
+    public enum PortSide {
+        NORTH, EAST, SOUTH, WEST
+    }
+
     private final String id;
     private String name;
     private int x;
@@ -48,5 +52,39 @@ public class Block {
 
     public boolean contains(int px, int py) {
         return px >= x && px <= x + width && py >= y && py <= y + height;
+    }
+
+    public int centerX() {
+        return x + width / 2;
+    }
+
+    public int centerY() {
+        return y + height / 2;
+    }
+
+    /** Ankerpunkt in der Mitte der angegebenen Seite. */
+    public int[] getPortPoint(PortSide side) {
+        return switch (side) {
+            case NORTH -> new int[]{x + width / 2, y};
+            case EAST  -> new int[]{x + width, y + height / 2};
+            case SOUTH -> new int[]{x + width / 2, y + height};
+            case WEST  -> new int[]{x, y + height / 2};
+        };
+    }
+
+    /**
+     * Wählt die beste Austritts-/Eintrittsseite relativ zu einem Zielpunkt.
+     */
+    public PortSide bestSideToward(int targetX, int targetY) {
+        int cx = centerX();
+        int cy = centerY();
+        int dx = targetX - cx;
+        int dy = targetY - cy;
+
+        if (Math.abs(dx) > Math.abs(dy)) {
+            return dx >= 0 ? PortSide.EAST : PortSide.WEST;
+        } else {
+            return dy >= 0 ? PortSide.SOUTH : PortSide.NORTH;
+        }
     }
 }
