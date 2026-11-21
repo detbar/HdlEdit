@@ -12,6 +12,7 @@ import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
 import java.io.File;
 import java.io.FileOutputStream;
+import hdledit.model.Connection;
 
 public class ProjectXmlSerializer {
 
@@ -64,6 +65,7 @@ public class ProjectXmlSerializer {
                     connEl.setAttribute("id", conn.getId());
                     connEl.setAttribute("from", conn.getFrom().getId());
                     connEl.setAttribute("to", conn.getTo().getId());
+                    connEl.setAttribute("style", conn.getStyle().name());
                     connsEl.appendChild(connEl);
                 }
             }
@@ -126,7 +128,13 @@ public class ProjectXmlSerializer {
                         Block from = blockMap.get(ce.getAttribute("from"));
                         Block to = blockMap.get(ce.getAttribute("to"));
                         if (from != null && to != null) {
-                            bd.addConnection(new Connection(ce.getAttribute("id"), from, to));
+                            Connection.Style style = Connection.Style.DIRECT;
+                            try {
+                                if (ce.hasAttribute("style")) {
+                                    style = Connection.Style.valueOf(ce.getAttribute("style"));
+                                }
+                            } catch (Exception ignored) {}
+                            bd.addConnection(new Connection(ce.getAttribute("id"), from, to, style));
                         }
                     }
 

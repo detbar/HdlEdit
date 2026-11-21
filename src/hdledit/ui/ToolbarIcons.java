@@ -34,4 +34,5 @@ public final class ToolbarIcons {
     public static final Icon SAVE_PROJECT  = createIcon(new Color(180, 120, 40), "S");
     public static final Icon CLOSE_PROJECT = createIcon(new Color(160, 60, 60),  "X");
     public static final Icon ADD_BLOCK     = createIcon(new Color(80, 80, 160),  "B");
+    public static final Icon CONNECT       = createIcon(new Color(40, 120, 160), "→");
 }

@@ -10,6 +10,7 @@ import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseMotionAdapter;
+import java.awt.geom.CubicCurve2D;
 import java.awt.geom.Path2D;
 
 public class BlockDiagramEditor extends JPanel {
@@ -21,12 +22,16 @@ public class BlockDiagramEditor extends JPanel {
     private boolean dragging = false;
     private Runnable onChangeCallback;
 
-    // Für Verbindungen
+    // Verbindungsmodus
+    private boolean connectMode = false;
     private boolean connecting = false;
     private Block connectionSource = null;
     private int tempLineX;
     private int tempLineY;
+    private Connection.Style currentStyle = Connection.Style.DIRECT;
 
+    private final JToggleButton connectToggle;
+    private final JComboBox<Connection.Style> styleCombo;
     private final JPopupMenu contextMenu;
     private int contextX;
     private int contextY;
@@ -36,20 +41,10 @@ public class BlockDiagramEditor extends JPanel {
     public BlockDiagramEditor() {
         setLayout(new BorderLayout());
 
-        JToolBar toolbar = createToolbar();
-        add(toolbar, BorderLayout.NORTH);
-
+        // Zeichenfläche zuerst (wegen definite assignment)
         drawingPanel = new DrawingPanel();
-        add(new JScrollPane(drawingPanel), BorderLayout.CENTER);
 
-        // Kontextmenü
-        contextMenu = new JPopupMenu();
-        JMenuItem addBlockItem = new JMenuItem("Neuen Block hier einfügen");
-        addBlockItem.addActionListener(e -> createBlockAt(contextX, contextY));
-        contextMenu.add(addBlockItem);
-    }
-
-    private JToolBar createToolbar() {
+        // Toolbar
         JToolBar toolbar = new JToolBar();
         toolbar.setFloatable(false);
         toolbar.setRollover(true);
@@ -61,11 +56,36 @@ public class BlockDiagramEditor extends JPanel {
 
         toolbar.addSeparator();
 
-        JLabel hint = new JLabel("  Verbindung: Alt + Ziehen von Block zu Block");
-        hint.setForeground(Color.DARK_GRAY);
-        toolbar.add(hint);
+        connectToggle = new JToggleButton(ToolbarIcons.CONNECT);
+        connectToggle.setToolTipText("Verbindungsmodus ein/aus");
+        connectToggle.addActionListener(e -> {
+            connectMode = connectToggle.isSelected();
+            connecting = false;
+            connectionSource = null;
+            drawingPanel.repaint();
+        });
+        toolbar.add(connectToggle);
 
-        return toolbar;
+        toolbar.addSeparator();
+
+        toolbar.add(new JLabel(" Stil: "));
+        styleCombo = new JComboBox<>(Connection.Style.values());
+        styleCombo.setSelectedItem(Connection.Style.DIRECT);
+        styleCombo.setMaximumSize(new Dimension(130, 28));
+        styleCombo.setToolTipText("Linienart der neuen Verbindungen");
+        styleCombo.addActionListener(e -> {
+            currentStyle = (Connection.Style) styleCombo.getSelectedItem();
+        });
+        toolbar.add(styleCombo);
+
+        add(toolbar, BorderLayout.NORTH);
+        add(new JScrollPane(drawingPanel), BorderLayout.CENTER);
+
+        // Kontextmenü
+        contextMenu = new JPopupMenu();
+        JMenuItem addBlockItem = new JMenuItem("Neuen Block hier einfügen");
+        addBlockItem.addActionListener(e -> createBlockAt(contextX, contextY));
+        contextMenu.add(addBlockItem);
     }
 
     private void createBlockAt(int x, int y) {
@@ -87,6 +107,8 @@ public class BlockDiagramEditor extends JPanel {
         dragging = false;
         connecting = false;
         connectionSource = null;
+        connectMode = false;
+        connectToggle.setSelected(false);
         drawingPanel.repaint();
     }
 
@@ -119,11 +141,9 @@ public class BlockDiagramEditor extends JPanel {
                         showContextMenu(e);
                         return;
                     }
-
                     if (diagram == null) return;
 
-                    // Alt-Taste gedrückt → Verbindungsmodus
-                    if (e.isAltDown()) {
+                    if (connectMode) {
                         Block hit = findBlockAt(e.getX(), e.getY());
                         if (hit != null) {
                             connecting = true;
@@ -132,10 +152,9 @@ public class BlockDiagramEditor extends JPanel {
                             tempLineY = e.getY();
                             selectedBlock = hit;
                             repaint();
-                            return;
                         }
+                        return;
                     }
-
                     handleMousePressed(e);
                 }
 
@@ -149,12 +168,10 @@ public class BlockDiagramEditor extends JPanel {
                     if (connecting && connectionSource != null) {
                         Block target = findBlockAt(e.getX(), e.getY());
                         if (target != null && target != connectionSource) {
-                            // Prüfen ob Verbindung schon existiert
                             boolean exists = diagram.getConnections().stream()
                                     .anyMatch(c -> c.getFrom() == connectionSource && c.getTo() == target);
-
                             if (!exists) {
-                                diagram.addConnection(new Connection(connectionSource, target));
+                                diagram.addConnection(new Connection(connectionSource, target, currentStyle));
                                 markDirty();
                             }
                         }
@@ -172,7 +189,7 @@ public class BlockDiagramEditor extends JPanel {
 
                 @Override
                 public void mouseClicked(MouseEvent e) {
-                    if (e.getClickCount() == 2 && SwingUtilities.isLeftMouseButton(e) && !e.isAltDown()) {
+                    if (e.getClickCount() == 2 && SwingUtilities.isLeftMouseButton(e) && !connectMode) {
                         handleDoubleClick(e);
                     }
                 }
@@ -196,9 +213,7 @@ public class BlockDiagramEditor extends JPanel {
             if (diagram == null) return null;
             for (int i = diagram.getBlocks().size() - 1; i >= 0; i--) {
                 Block block = diagram.getBlocks().get(i);
-                if (block.contains(x, y)) {
-                    return block;
-                }
+                if (block.contains(x, y)) return block;
             }
             return null;
         }
@@ -245,40 +260,35 @@ public class BlockDiagramEditor extends JPanel {
                 return;
             }
 
-            // === Verbindungen zeichnen ===
-            g2.setStroke(new BasicStroke(2f));
+            // Bestehende Verbindungen
             for (Connection conn : diagram.getConnections()) {
-                drawConnection(g2, conn.getFrom(), conn.getTo(), false);
+                drawConnection(g2, conn);
             }
 
-            // Temporäre Verbindungslinie (während Alt-Ziehen)
+            // Temporäre Linie während des Ziehens
             if (connecting && connectionSource != null) {
                 g2.setColor(new Color(30, 120, 200, 180));
                 g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 0,
                         new float[]{8, 6}, 0));
-                int x1 = connectionSource.getX() + connectionSource.getWidth() / 2;
-                int y1 = connectionSource.getY() + connectionSource.getHeight() / 2;
-                g2.drawLine(x1, y1, tempLineX, tempLineY);
+                int x1 = centerX(connectionSource);
+                int y1 = centerY(connectionSource);
+                drawStyledLine(g2, x1, y1, tempLineX, tempLineY, currentStyle, true);
             }
 
-            // === Blöcke zeichnen ===
+            // Blöcke
             for (Block block : diagram.getBlocks()) {
                 boolean isSelected = block == selectedBlock;
 
-                // Schatten
                 g2.setColor(new Color(0, 0, 0, 30));
                 g2.fillRoundRect(block.getX() + 3, block.getY() + 3, block.getWidth(), block.getHeight(), 10, 10);
 
-                // Körper
                 g2.setColor(isSelected ? new Color(180, 210, 255) : new Color(230, 240, 255));
                 g2.fillRoundRect(block.getX(), block.getY(), block.getWidth(), block.getHeight(), 10, 10);
 
-                // Rahmen
                 g2.setColor(isSelected ? new Color(30, 90, 180) : new Color(80, 120, 180));
                 g2.setStroke(new BasicStroke(isSelected ? 2.5f : 1.5f));
                 g2.drawRoundRect(block.getX(), block.getY(), block.getWidth(), block.getHeight(), 10, 10);
 
-                // Name
                 g2.setColor(Color.BLACK);
                 FontMetrics fm = g2.getFontMetrics();
                 int textX = block.getX() + (block.getWidth() - fm.stringWidth(block.getName())) / 2;
@@ -287,24 +297,83 @@ public class BlockDiagramEditor extends JPanel {
             }
         }
 
-        private void drawConnection(Graphics2D g2, Block from, Block to, boolean temporary) {
-            int x1 = from.getX() + from.getWidth() / 2;
-            int y1 = from.getY() + from.getHeight() / 2;
-            int x2 = to.getX() + to.getWidth() / 2;
-            int y2 = to.getY() + to.getHeight() / 2;
+        private int centerX(Block b) {
+            return b.getX() + b.getWidth() / 2;
+        }
+
+        private int centerY(Block b) {
+            return b.getY() + b.getHeight() / 2;
+        }
+
+        private void drawConnection(Graphics2D g2, Connection conn) {
+            int x1 = centerX(conn.getFrom());
+            int y1 = centerY(conn.getFrom());
+            int x2 = centerX(conn.getTo());
+            int y2 = centerY(conn.getTo());
 
             g2.setColor(new Color(60, 60, 60));
             g2.setStroke(new BasicStroke(2.2f));
-            g2.drawLine(x1, y1, x2, y2);
-
-            // Pfeilspitze
-            drawArrowHead(g2, x1, y1, x2, y2);
+            drawStyledLine(g2, x1, y1, x2, y2, conn.getStyle(), false);
+            drawArrowHead(g2, x1, y1, x2, y2, conn.getStyle());
         }
 
-        private void drawArrowHead(Graphics2D g2, int x1, int y1, int x2, int y2) {
-            double angle = Math.atan2(y2 - y1, x2 - x1);
-            int arrowSize = 12;
+        private void drawStyledLine(Graphics2D g2, int x1, int y1, int x2, int y2,
+                                    Connection.Style style, boolean temporary) {
+            switch (style) {
+                case ORTHOGONAL -> drawOrthogonal(g2, x1, y1, x2, y2);
+                case BEZIER     -> drawBezier(g2, x1, y1, x2, y2);
+                default         -> g2.drawLine(x1, y1, x2, y2); // DIRECT
+            }
+        }
 
+        private void drawOrthogonal(Graphics2D g2, int x1, int y1, int x2, int y2) {
+            // Einfache rechtwinklige Verbindung (Z- oder L-Form)
+            int midX = (x1 + x2) / 2;
+            Path2D path = new Path2D.Double();
+            path.moveTo(x1, y1);
+            path.lineTo(midX, y1);
+            path.lineTo(midX, y2);
+            path.lineTo(x2, y2);
+            g2.draw(path);
+        }
+
+        private void drawBezier(Graphics2D g2, int x1, int y1, int x2, int y2) {
+            double dx = x2 - x1;
+            double dy = y2 - y1;
+            // Kontrollpunkte seitlich versetzt für schöne Kurve
+            double cx1 = x1 + dx * 0.4;
+            double cy1 = y1;
+            double cx2 = x2 - dx * 0.4;
+            double cy2 = y2;
+
+            // Bei eher vertikalen Verbindungen die Kontrollpunkte anders setzen
+            if (Math.abs(dy) > Math.abs(dx)) {
+                cx1 = x1;
+                cy1 = y1 + dy * 0.4;
+                cx2 = x2;
+                cy2 = y2 - dy * 0.4;
+            }
+
+            CubicCurve2D curve = new CubicCurve2D.Double(x1, y1, cx1, cy1, cx2, cy2, x2, y2);
+            g2.draw(curve);
+        }
+
+        private void drawArrowHead(Graphics2D g2, int x1, int y1, int x2, int y2, Connection.Style style) {
+            // Pfeil am Zielende
+            double angle;
+            if (style == Connection.Style.ORTHOGONAL) {
+                // Letztes Segment ist horizontal oder vertikal
+                int midX = (x1 + x2) / 2;
+                if (Math.abs(x2 - midX) > 2) {
+                    angle = (x2 > midX) ? 0 : Math.PI;
+                } else {
+                    angle = (y2 > y1) ? Math.PI / 2 : -Math.PI / 2;
+                }
+            } else {
+                angle = Math.atan2(y2 - y1, x2 - x1);
+            }
+
+            int arrowSize = 11;
             Path2D arrow = new Path2D.Double();
             arrow.moveTo(x2, y2);
             arrow.lineTo(x2 - arrowSize * Math.cos(angle - Math.PI / 6),
@@ -312,7 +381,6 @@ public class BlockDiagramEditor extends JPanel {
             arrow.lineTo(x2 - arrowSize * Math.cos(angle + Math.PI / 6),
                     y2 - arrowSize * Math.sin(angle + Math.PI / 6));
             arrow.closePath();
-
             g2.fill(arrow);
         }
     }
