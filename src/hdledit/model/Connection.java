@@ -20,18 +20,26 @@ public class Connection {
     private Block.PortSide toSide;
     private Style style;
     private final List<int[]> waypoints = new ArrayList<>();
+    /** Ein Eintrag pro Abschnitt (Start→WP1, WP1→WP2, …, WPn→Ende). */
+    private final List<SegmentData> segments = new ArrayList<>();
 
     public Connection(Block from, Block to, Style style) {
-        this(UUID.randomUUID().toString(), from, to, style, null, null, null);
+        this(UUID.randomUUID().toString(), from, to, style, null, null, null, null);
     }
 
     public Connection(String id, Block from, Block to, Style style) {
-        this(id, from, to, style, null, null, null);
+        this(id, from, to, style, null, null, null, null);
     }
 
     public Connection(String id, Block from, Block to, Style style,
                       Block.PortSide fromSide, Block.PortSide toSide,
                       List<int[]> waypoints) {
+        this(id, from, to, style, fromSide, toSide, waypoints, null);
+    }
+
+    public Connection(String id, Block from, Block to, Style style,
+                      Block.PortSide fromSide, Block.PortSide toSide,
+                      List<int[]> waypoints, List<SegmentData> segments) {
         this.id = id;
         this.from = from;
         this.to = to;
@@ -43,6 +51,10 @@ public class Connection {
                 this.waypoints.add(new int[]{wp[0], wp[1]});
             }
         }
+        if (segments != null) {
+            this.segments.addAll(segments);
+        }
+        ensureSegmentCount();
     }
 
     public String getId() { return id; }
@@ -59,17 +71,28 @@ public class Connection {
     public void setToSide(Block.PortSide toSide) { this.toSide = toSide; }
 
     public List<int[]> getWaypoints() { return waypoints; }
+    public List<SegmentData> getSegments() { return segments; }
 
-    public void clearWaypoints() { waypoints.clear(); }
+    public void clearWaypoints() {
+        waypoints.clear();
+        segments.clear();
+        ensureSegmentCount();
+    }
 
     public void addWaypoint(int x, int y) {
         waypoints.add(new int[]{x, y});
+        ensureSegmentCount();
     }
 
     public void insertWaypoint(int index, int x, int y) {
         if (index < 0) index = 0;
         if (index > waypoints.size()) index = waypoints.size();
         waypoints.add(index, new int[]{x, y});
+        // Neues Segment an dieser Stelle einfügen
+        if (index < segments.size()) {
+            segments.add(index, new SegmentData(SegmentData.Kind.LINE));
+        }
+        ensureSegmentCount();
     }
 
     public void setWaypoint(int index, int x, int y) {
@@ -82,6 +105,40 @@ public class Connection {
     public void removeWaypoint(int index) {
         if (index >= 0 && index < waypoints.size()) {
             waypoints.remove(index);
+            if (index < segments.size()) {
+                segments.remove(index);
+            }
+            ensureSegmentCount();
+        }
+    }
+
+    /** Anzahl Abschnitte = waypoints + 1 */
+    public void ensureSegmentCount() {
+        int needed = waypoints.size() + 1;
+        while (segments.size() < needed) {
+            SegmentData.Kind def = (style == Style.BEZIER)
+                    ? SegmentData.Kind.BEZIER
+                    : SegmentData.Kind.LINE;
+            segments.add(new SegmentData(def));
+        }
+        while (segments.size() > needed) {
+            segments.remove(segments.size() - 1);
+        }
+    }
+
+    public SegmentData getSegment(int index) {
+        ensureSegmentCount();
+        if (index < 0 || index >= segments.size()) return null;
+        return segments.get(index);
+    }
+
+    public void setSegmentKind(int index, SegmentData.Kind kind) {
+        ensureSegmentCount();
+        if (index < 0 || index >= segments.size()) return;
+        SegmentData seg = segments.get(index);
+        seg.setKind(kind);
+        if (kind == SegmentData.Kind.LINE) {
+            seg.clearControls();
         }
     }
 }
