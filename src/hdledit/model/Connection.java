@@ -16,44 +16,28 @@ public class Connection {
     private final String id;
     private Block from;
     private Block to;
-    private Block.PortSide fromSide;
-    private Block.PortSide toSide;
+    private Port fromPort;
+    private Port toPort;
     private Style style;
     private final List<int[]> waypoints = new ArrayList<>();
-    /** Ein Eintrag pro Abschnitt (Start→WP1, WP1→WP2, …, WPn→Ende). */
     private final List<SegmentData> segments = new ArrayList<>();
 
-    public Connection(Block from, Block to, Style style) {
-        this(UUID.randomUUID().toString(), from, to, style, null, null, null, null);
+    public Connection(Block from, Port fromPort, Block to, Port toPort, Style style) {
+        this(UUID.randomUUID().toString(), from, fromPort, to, toPort, style, null, null);
     }
 
-    public Connection(String id, Block from, Block to, Style style) {
-        this(id, from, to, style, null, null, null, null);
-    }
-
-    public Connection(String id, Block from, Block to, Style style,
-                      Block.PortSide fromSide, Block.PortSide toSide,
-                      List<int[]> waypoints) {
-        this(id, from, to, style, fromSide, toSide, waypoints, null);
-    }
-
-    public Connection(String id, Block from, Block to, Style style,
-                      Block.PortSide fromSide, Block.PortSide toSide,
+    public Connection(String id, Block from, Port fromPort, Block to, Port toPort, Style style,
                       List<int[]> waypoints, List<SegmentData> segments) {
         this.id = id;
         this.from = from;
+        this.fromPort = fromPort;
         this.to = to;
+        this.toPort = toPort;
         this.style = style != null ? style : Style.DIRECT;
-        this.fromSide = fromSide;
-        this.toSide = toSide;
         if (waypoints != null) {
-            for (int[] wp : waypoints) {
-                this.waypoints.add(new int[]{wp[0], wp[1]});
-            }
+            for (int[] wp : waypoints) this.waypoints.add(new int[]{wp[0], wp[1]});
         }
-        if (segments != null) {
-            this.segments.addAll(segments);
-        }
+        if (segments != null) this.segments.addAll(segments);
         ensureSegmentCount();
     }
 
@@ -62,13 +46,14 @@ public class Connection {
     public void setFrom(Block from) { this.from = from; }
     public Block getTo() { return to; }
     public void setTo(Block to) { this.to = to; }
+
+    public Port getFromPort() { return fromPort; }
+    public void setFromPort(Port fromPort) { this.fromPort = fromPort; }
+    public Port getToPort() { return toPort; }
+    public void setToPort(Port toPort) { this.toPort = toPort; }
+
     public Style getStyle() { return style; }
     public void setStyle(Style style) { this.style = style; }
-
-    public Block.PortSide getFromSide() { return fromSide; }
-    public void setFromSide(Block.PortSide fromSide) { this.fromSide = fromSide; }
-    public Block.PortSide getToSide() { return toSide; }
-    public void setToSide(Block.PortSide toSide) { this.toSide = toSide; }
 
     public List<int[]> getWaypoints() { return waypoints; }
     public List<SegmentData> getSegments() { return segments; }
@@ -88,7 +73,6 @@ public class Connection {
         if (index < 0) index = 0;
         if (index > waypoints.size()) index = waypoints.size();
         waypoints.add(index, new int[]{x, y});
-        // Neues Segment an dieser Stelle einfügen
         if (index < segments.size()) {
             segments.add(index, new SegmentData(SegmentData.Kind.LINE));
         }
@@ -105,25 +89,19 @@ public class Connection {
     public void removeWaypoint(int index) {
         if (index >= 0 && index < waypoints.size()) {
             waypoints.remove(index);
-            if (index < segments.size()) {
-                segments.remove(index);
-            }
+            if (index < segments.size()) segments.remove(index);
             ensureSegmentCount();
         }
     }
 
-    /** Anzahl Abschnitte = waypoints + 1 */
     public void ensureSegmentCount() {
         int needed = waypoints.size() + 1;
         while (segments.size() < needed) {
             SegmentData.Kind def = (style == Style.BEZIER)
-                    ? SegmentData.Kind.BEZIER
-                    : SegmentData.Kind.LINE;
+                    ? SegmentData.Kind.BEZIER : SegmentData.Kind.LINE;
             segments.add(new SegmentData(def));
         }
-        while (segments.size() > needed) {
-            segments.remove(segments.size() - 1);
-        }
+        while (segments.size() > needed) segments.remove(segments.size() - 1);
     }
 
     public SegmentData getSegment(int index) {
@@ -137,8 +115,6 @@ public class Connection {
         if (index < 0 || index >= segments.size()) return;
         SegmentData seg = segments.get(index);
         seg.setKind(kind);
-        if (kind == SegmentData.Kind.LINE) {
-            seg.clearControls();
-        }
+        if (kind == SegmentData.Kind.LINE) seg.clearControls();
     }
 }
