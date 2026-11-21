@@ -12,7 +12,8 @@ import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
 import java.io.File;
 import java.io.FileOutputStream;
-import hdledit.model.Connection;
+import java.util.ArrayList;
+import java.util.List;
 
 public class ProjectXmlSerializer {
 
@@ -41,7 +42,6 @@ public class ProjectXmlSerializer {
             diagramsEl.appendChild(diagEl);
 
             if (d instanceof BlockDiagram blockDiagram) {
-                // Blöcke
                 Element blocksEl = doc.createElement("blocks");
                 diagEl.appendChild(blocksEl);
 
@@ -56,7 +56,6 @@ public class ProjectXmlSerializer {
                     blocksEl.appendChild(blockEl);
                 }
 
-                // Verbindungen
                 Element connsEl = doc.createElement("connections");
                 diagEl.appendChild(connsEl);
 
@@ -66,6 +65,24 @@ public class ProjectXmlSerializer {
                     connEl.setAttribute("from", conn.getFrom().getId());
                     connEl.setAttribute("to", conn.getTo().getId());
                     connEl.setAttribute("style", conn.getStyle().name());
+                    if (conn.getFromSide() != null) {
+                        connEl.setAttribute("fromSide", conn.getFromSide().name());
+                    }
+                    if (conn.getToSide() != null) {
+                        connEl.setAttribute("toSide", conn.getToSide().name());
+                    }
+
+                    if (!conn.getWaypoints().isEmpty()) {
+                        Element wpsEl = doc.createElement("waypoints");
+                        connEl.appendChild(wpsEl);
+                        for (int[] wp : conn.getWaypoints()) {
+                            Element wpEl = doc.createElement("wp");
+                            wpEl.setAttribute("x", String.valueOf(wp[0]));
+                            wpEl.setAttribute("y", String.valueOf(wp[1]));
+                            wpsEl.appendChild(wpEl);
+                        }
+                    }
+
                     connsEl.appendChild(connEl);
                 }
             }
@@ -104,7 +121,6 @@ public class ProjectXmlSerializer {
                 case BLOCK_DIAGRAM -> {
                     BlockDiagram bd = new BlockDiagram(id, name);
 
-                    // Blöcke laden
                     java.util.Map<String, Block> blockMap = new java.util.HashMap<>();
                     NodeList blockNodes = el.getElementsByTagName("block");
                     for (int j = 0; j < blockNodes.getLength(); j++) {
@@ -121,7 +137,6 @@ public class ProjectXmlSerializer {
                         blockMap.put(block.getId(), block);
                     }
 
-                    // Verbindungen laden
                     NodeList connNodes = el.getElementsByTagName("connection");
                     for (int k = 0; k < connNodes.getLength(); k++) {
                         Element ce = (Element) connNodes.item(k);
@@ -134,7 +149,30 @@ public class ProjectXmlSerializer {
                                     style = Connection.Style.valueOf(ce.getAttribute("style"));
                                 }
                             } catch (Exception ignored) {}
-                            bd.addConnection(new Connection(ce.getAttribute("id"), from, to, style));
+
+                            Block.PortSide fromSide = null;
+                            Block.PortSide toSide = null;
+                            try {
+                                if (ce.hasAttribute("fromSide")) {
+                                    fromSide = Block.PortSide.valueOf(ce.getAttribute("fromSide"));
+                                }
+                                if (ce.hasAttribute("toSide")) {
+                                    toSide = Block.PortSide.valueOf(ce.getAttribute("toSide"));
+                                }
+                            } catch (Exception ignored) {}
+
+                            List<int[]> waypoints = new ArrayList<>();
+                            NodeList wpNodes = ce.getElementsByTagName("wp");
+                            for (int w = 0; w < wpNodes.getLength(); w++) {
+                                Element we = (Element) wpNodes.item(w);
+                                waypoints.add(new int[]{
+                                        Integer.parseInt(we.getAttribute("x")),
+                                        Integer.parseInt(we.getAttribute("y"))
+                                });
+                            }
+
+                            bd.addConnection(new Connection(
+                                    ce.getAttribute("id"), from, to, style, fromSide, toSide, waypoints));
                         }
                     }
 
