@@ -12,8 +12,8 @@ public class Connection {
     }
 
     private final String id;
-    private final Block from;
-    private final Block to;
+    private Block from;
+    private Block to;
     private Style style;
 
     public Connection(Block from, Block to, Style style) {
@@ -32,7 +32,9 @@ public class Connection {
 
     public String getId() { return id; }
     public Block getFrom() { return from; }
+    public void setFrom(Block from) { this.from = from; }
     public Block getTo() { return to; }
+    public void setTo(Block to) { this.to = to; }
     public Style getStyle() { return style; }
     public void setStyle(Style style) { this.style = style; }
 }

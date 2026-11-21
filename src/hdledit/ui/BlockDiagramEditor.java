@@ -33,6 +33,13 @@ public class BlockDiagramEditor extends JPanel {
     private int tempLineY;
     private Connection.Style currentStyle = Connection.Style.DIRECT;
 
+    // Endpunkt einer bestehenden Verbindung ziehen (neu verbinden)
+    private enum Endpoint { FROM, TO }
+    private boolean draggingEndpoint = false;
+    private Endpoint draggingWhich = null;
+    private int endpointDragX;
+    private int endpointDragY;
+
     private final JToggleButton connectToggle;
     private final JComboBox<Connection.Style> styleCombo;
     private final JPopupMenu contextMenu;
@@ -41,6 +48,9 @@ public class BlockDiagramEditor extends JPanel {
     private int contextY;
 
     private final DrawingPanel drawingPanel;
+
+    private static final int HANDLE_SIZE = 10;
+    private static final int HANDLE_HIT = 12;
 
     public BlockDiagramEditor() {
         setLayout(new BorderLayout());
@@ -65,6 +75,7 @@ public class BlockDiagramEditor extends JPanel {
             connecting = false;
             connectionSource = null;
             selectedConnection = null;
+            draggingEndpoint = false;
             drawingPanel.repaint();
         });
         toolbar.add(connectToggle);
@@ -76,25 +87,30 @@ public class BlockDiagramEditor extends JPanel {
         styleCombo.setSelectedItem(Connection.Style.DIRECT);
         styleCombo.setMaximumSize(new Dimension(130, 28));
         styleCombo.setToolTipText("Linienart der neuen Verbindungen");
-        styleCombo.addActionListener(e -> currentStyle = (Connection.Style) styleCombo.getSelectedItem());
+        styleCombo.addActionListener(e -> {
+            currentStyle = (Connection.Style) styleCombo.getSelectedItem();
+            // Stil der ausgewählten Verbindung ändern
+            if (selectedConnection != null) {
+                selectedConnection.setStyle(currentStyle);
+                markDirty();
+                drawingPanel.repaint();
+            }
+        });
         toolbar.add(styleCombo);
 
         add(toolbar, BorderLayout.NORTH);
         add(new JScrollPane(drawingPanel), BorderLayout.CENTER);
 
-        // Kontextmenü leere Fläche / Block
         contextMenu = new JPopupMenu();
         JMenuItem addBlockItem = new JMenuItem("Neuen Block hier einfügen");
         addBlockItem.addActionListener(e -> createBlockAt(contextX, contextY));
         contextMenu.add(addBlockItem);
 
-        // Kontextmenü Verbindung
         connectionContextMenu = new JPopupMenu();
         JMenuItem deleteConnItem = new JMenuItem("Verbindung löschen");
         deleteConnItem.addActionListener(e -> deleteSelectedConnection());
         connectionContextMenu.add(deleteConnItem);
 
-        // Tastatur: Entf löscht ausgewählte Verbindung
         setFocusable(true);
         drawingPanel.setFocusable(true);
         drawingPanel.addKeyListener(new KeyAdapter() {
@@ -111,6 +127,7 @@ public class BlockDiagramEditor extends JPanel {
         if (diagram != null && selectedConnection != null) {
             diagram.removeConnection(selectedConnection);
             selectedConnection = null;
+            draggingEndpoint = false;
             markDirty();
             drawingPanel.repaint();
         }
@@ -137,6 +154,7 @@ public class BlockDiagramEditor extends JPanel {
         dragging = false;
         connecting = false;
         connectionSource = null;
+        draggingEndpoint = false;
         connectMode = false;
         connectToggle.setSelected(false);
         drawingPanel.repaint();
@@ -153,6 +171,11 @@ public class BlockDiagramEditor extends JPanel {
                 onChangeCallback.run();
             }
         }
+    }
+
+    private int[] endpoint(Block from, Block toward) {
+        Block.PortSide side = from.bestSideToward(toward.centerX(), toward.centerY());
+        return from.getPortPoint(side);
     }
 
     // =====================================================
@@ -178,6 +201,20 @@ public class BlockDiagramEditor extends JPanel {
                     }
                     if (diagram == null) return;
 
+                    // Endpunkt-Handle einer ausgewählten Verbindung?
+                    if (selectedConnection != null && !connectMode) {
+                        Endpoint handle = hitEndpointHandle(e.getX(), e.getY(), selectedConnection);
+                        if (handle != null) {
+                            draggingEndpoint = true;
+                            draggingWhich = handle;
+                            endpointDragX = e.getX();
+                            endpointDragY = e.getY();
+                            selectedBlock = null;
+                            repaint();
+                            return;
+                        }
+                    }
+
                     if (connectMode) {
                         Block hit = findBlockAt(e.getX(), e.getY());
                         if (hit != null) {
@@ -192,11 +229,11 @@ public class BlockDiagramEditor extends JPanel {
                         return;
                     }
 
-                    // Zuerst Verbindung treffen?
                     Connection hitConn = findConnectionAt(e.getX(), e.getY());
                     if (hitConn != null) {
                         selectedConnection = hitConn;
                         selectedBlock = null;
+                        styleCombo.setSelectedItem(hitConn.getStyle());
                         repaint();
                         return;
                     }
@@ -208,6 +245,28 @@ public class BlockDiagramEditor extends JPanel {
                 public void mouseReleased(MouseEvent e) {
                     if (e.isPopupTrigger()) {
                         handlePopup(e);
+                        return;
+                    }
+
+                    // Endpunkt loslassen → neu verbinden
+                    if (draggingEndpoint && selectedConnection != null) {
+                        Block target = findBlockAt(e.getX(), e.getY());
+                        if (target != null) {
+                            if (draggingWhich == Endpoint.FROM) {
+                                if (target != selectedConnection.getTo()) {
+                                    selectedConnection.setFrom(target);
+                                    markDirty();
+                                }
+                            } else {
+                                if (target != selectedConnection.getFrom()) {
+                                    selectedConnection.setTo(target);
+                                    markDirty();
+                                }
+                            }
+                        }
+                        draggingEndpoint = false;
+                        draggingWhich = null;
+                        repaint();
                         return;
                     }
 
@@ -244,6 +303,12 @@ public class BlockDiagramEditor extends JPanel {
             addMouseMotionListener(new MouseMotionAdapter() {
                 @Override
                 public void mouseDragged(MouseEvent e) {
+                    if (draggingEndpoint) {
+                        endpointDragX = e.getX();
+                        endpointDragY = e.getY();
+                        repaint();
+                        return;
+                    }
                     if (connecting) {
                         tempLineX = e.getX();
                         tempLineY = e.getY();
@@ -255,6 +320,19 @@ public class BlockDiagramEditor extends JPanel {
             });
         }
 
+        private Endpoint hitEndpointHandle(int px, int py, Connection conn) {
+            int[] fromPt = endpoint(conn.getFrom(), conn.getTo());
+            int[] toPt = endpoint(conn.getTo(), conn.getFrom());
+
+            if (Math.hypot(px - fromPt[0], py - fromPt[1]) <= HANDLE_HIT) {
+                return Endpoint.FROM;
+            }
+            if (Math.hypot(px - toPt[0], py - toPt[1]) <= HANDLE_HIT) {
+                return Endpoint.TO;
+            }
+            return null;
+        }
+
         private void handlePopup(MouseEvent e) {
             contextX = e.getX();
             contextY = e.getY();
@@ -263,6 +341,7 @@ public class BlockDiagramEditor extends JPanel {
             if (hitConn != null) {
                 selectedConnection = hitConn;
                 selectedBlock = null;
+                styleCombo.setSelectedItem(hitConn.getStyle());
                 repaint();
                 connectionContextMenu.show(this, e.getX(), e.getY());
                 return;
@@ -316,9 +395,7 @@ public class BlockDiagramEditor extends JPanel {
             }
             double t = ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy);
             t = Math.max(0, Math.min(1, t));
-            double projX = x1 + t * dx;
-            double projY = y1 + t * dy;
-            return Math.hypot(px - projX, py - projY);
+            return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
         }
 
         private double distanceToBezier(int x1, int y1, int x2, int y2, int px, int py) {
@@ -343,6 +420,7 @@ public class BlockDiagramEditor extends JPanel {
 
         private void handleMousePressed(MouseEvent e) {
             selectedConnection = null;
+            draggingEndpoint = false;
             selectedBlock = findBlockAt(e.getX(), e.getY());
             if (selectedBlock != null) {
                 dragOffsetX = e.getX() - selectedBlock.getX();
@@ -366,12 +444,6 @@ public class BlockDiagramEditor extends JPanel {
             }
         }
 
-        /** Endpunkt am Rand des Blocks in Richtung des anderen Blocks. */
-        private int[] endpoint(Block from, Block toward) {
-            Block.PortSide side = from.bestSideToward(toward.centerX(), toward.centerY());
-            return from.getPortPoint(side);
-        }
-
         @Override
         protected void paintComponent(Graphics g) {
             super.paintComponent(g);
@@ -386,10 +458,15 @@ public class BlockDiagramEditor extends JPanel {
 
             // Verbindungen
             for (Connection conn : diagram.getConnections()) {
-                drawConnection(g2, conn, conn == selectedConnection);
+                boolean selected = conn == selectedConnection;
+                if (selected && draggingEndpoint) {
+                    drawConnectionWhileDraggingEndpoint(g2, conn);
+                } else {
+                    drawConnection(g2, conn, selected);
+                }
             }
 
-            // Temporäre Verbindungslinie
+            // Temporäre neue Verbindung
             if (connecting && connectionSource != null) {
                 g2.setColor(new Color(30, 120, 200, 180));
                 g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 0,
@@ -402,15 +479,21 @@ public class BlockDiagramEditor extends JPanel {
             // Blöcke + Ports
             for (Block block : diagram.getBlocks()) {
                 boolean isSelected = block == selectedBlock;
+                boolean highlightAsTarget = draggingEndpoint && block.contains(endpointDragX, endpointDragY);
 
                 g2.setColor(new Color(0, 0, 0, 30));
                 g2.fillRoundRect(block.getX() + 3, block.getY() + 3, block.getWidth(), block.getHeight(), 10, 10);
 
-                g2.setColor(isSelected ? new Color(180, 210, 255) : new Color(230, 240, 255));
+                if (highlightAsTarget) {
+                    g2.setColor(new Color(200, 255, 200));
+                } else {
+                    g2.setColor(isSelected ? new Color(180, 210, 255) : new Color(230, 240, 255));
+                }
                 g2.fillRoundRect(block.getX(), block.getY(), block.getWidth(), block.getHeight(), 10, 10);
 
-                g2.setColor(isSelected ? new Color(30, 90, 180) : new Color(80, 120, 180));
-                g2.setStroke(new BasicStroke(isSelected ? 2.5f : 1.5f));
+                g2.setColor(highlightAsTarget ? new Color(40, 140, 40)
+                        : (isSelected ? new Color(30, 90, 180) : new Color(80, 120, 180)));
+                g2.setStroke(new BasicStroke(isSelected || highlightAsTarget ? 2.5f : 1.5f));
                 g2.drawRoundRect(block.getX(), block.getY(), block.getWidth(), block.getHeight(), 10, 10);
 
                 g2.setColor(Color.BLACK);
@@ -419,11 +502,59 @@ public class BlockDiagramEditor extends JPanel {
                 int textY = block.getY() + (block.getHeight() + fm.getAscent()) / 2 - 2;
                 g2.drawString(block.getName(), textX, textY);
 
-                // Ports anzeigen im Connect-Modus oder wenn Block ausgewählt
-                if (connectMode || isSelected) {
+                if (connectMode || isSelected || draggingEndpoint) {
                     drawPorts(g2, block);
                 }
             }
+
+            // Handles der ausgewählten Verbindung
+            if (selectedConnection != null && !draggingEndpoint) {
+                drawEndpointHandles(g2, selectedConnection);
+            }
+        }
+
+        private void drawConnectionWhileDraggingEndpoint(Graphics2D g2, Connection conn) {
+            int x1, y1, x2, y2;
+            if (draggingWhich == Endpoint.FROM) {
+                x1 = endpointDragX;
+                y1 = endpointDragY;
+                int[] to = endpoint(conn.getTo(), conn.getFrom());
+                // grob Richtung vom Drag-Punkt
+                Block.PortSide side = conn.getTo().bestSideToward(endpointDragX, endpointDragY);
+                to = conn.getTo().getPortPoint(side);
+                x2 = to[0];
+                y2 = to[1];
+            } else {
+                int[] from = endpoint(conn.getFrom(), conn.getTo());
+                Block.PortSide side = conn.getFrom().bestSideToward(endpointDragX, endpointDragY);
+                from = conn.getFrom().getPortPoint(side);
+                x1 = from[0];
+                y1 = from[1];
+                x2 = endpointDragX;
+                y2 = endpointDragY;
+            }
+
+            g2.setColor(new Color(200, 80, 40, 200));
+            g2.setStroke(new BasicStroke(2.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 0,
+                    new float[]{6, 5}, 0));
+            drawStyledLine(g2, x1, y1, x2, y2, conn.getStyle());
+        }
+
+        private void drawEndpointHandles(Graphics2D g2, Connection conn) {
+            int[] fromPt = endpoint(conn.getFrom(), conn.getTo());
+            int[] toPt = endpoint(conn.getTo(), conn.getFrom());
+
+            drawHandle(g2, fromPt[0], fromPt[1], new Color(40, 140, 40));  // Start = grün
+            drawHandle(g2, toPt[0], toPt[1], new Color(180, 60, 40));      // Ende = rot
+        }
+
+        private void drawHandle(Graphics2D g2, int x, int y, Color color) {
+            int r = HANDLE_SIZE / 2;
+            g2.setColor(Color.WHITE);
+            g2.fillRect(x - r, y - r, HANDLE_SIZE, HANDLE_SIZE);
+            g2.setColor(color);
+            g2.setStroke(new BasicStroke(2f));
+            g2.drawRect(x - r, y - r, HANDLE_SIZE, HANDLE_SIZE);
         }
 
         private void drawPorts(Graphics2D g2, Block block) {
@@ -477,23 +608,18 @@ public class BlockDiagramEditor extends JPanel {
             double dy = y2 - y1;
             double cx1, cy1, cx2, cy2;
             if (Math.abs(dy) > Math.abs(dx)) {
-                cx1 = x1;
-                cy1 = y1 + dy * 0.4;
-                cx2 = x2;
-                cy2 = y2 - dy * 0.4;
+                cx1 = x1; cy1 = y1 + dy * 0.4;
+                cx2 = x2; cy2 = y2 - dy * 0.4;
             } else {
-                cx1 = x1 + dx * 0.4;
-                cy1 = y1;
-                cx2 = x2 - dx * 0.4;
-                cy2 = y2;
+                cx1 = x1 + dx * 0.4; cy1 = y1;
+                cx2 = x2 - dx * 0.4; cy2 = y2;
             }
             return new double[]{cx1, cy1, cx2, cy2};
         }
 
         private void drawBezier(Graphics2D g2, int x1, int y1, int x2, int y2) {
             double[] c = bezierControls(x1, y1, x2, y2);
-            CubicCurve2D curve = new CubicCurve2D.Double(x1, y1, c[0], c[1], c[2], c[3], x2, y2);
-            g2.draw(curve);
+            g2.draw(new CubicCurve2D.Double(x1, y1, c[0], c[1], c[2], c[3], x2, y2));
         }
 
         private void drawArrowHead(Graphics2D g2, int x1, int y1, int x2, int y2, Connection.Style style) {
