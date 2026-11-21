@@ -4,6 +4,7 @@ package hdledit.ui;
 import hdledit.model.Block;
 import hdledit.model.BlockDiagram;
 import hdledit.model.Connection;
+import hdledit.model.SegmentData;
 
 import javax.swing.*;
 import java.awt.*;
@@ -22,8 +23,7 @@ public class BlockDiagramEditor extends JPanel {
     private BlockDiagram diagram;
     private Block selectedBlock = null;
     private Connection selectedConnection = null;
-    private int dragOffsetX;
-    private int dragOffsetY;
+    private int dragOffsetX, dragOffsetY;
     private boolean dragging = false;
     private Runnable onChangeCallback;
 
@@ -32,25 +32,27 @@ public class BlockDiagramEditor extends JPanel {
     private Block connectionSource = null;
     private Block.PortSide connectionSourceSide = null;
     private final List<int[]> pendingWaypoints = new ArrayList<>();
-    private int tempLineX;
-    private int tempLineY;
+    private int tempLineX, tempLineY;
     private Connection.Style currentStyle = Connection.Style.DIRECT;
 
     private enum Endpoint { FROM, TO }
     private boolean draggingEndpoint = false;
     private Endpoint draggingWhich = null;
-    private int endpointDragX;
-    private int endpointDragY;
+    private int endpointDragX, endpointDragY;
 
     private boolean draggingSegment = false;
     private int draggingSegmentIndex = -1;
     private boolean segmentAxisAligned = false;
     private boolean segmentIsHorizontal = false;
-    private int segmentLastX;
-    private int segmentLastY;
+    private int segmentLastX, segmentLastY;
 
     private boolean draggingWaypoint = false;
     private int draggingWaypointIndex = -1;
+
+    // Bezier-Kontrollpunkt ziehen: segmentIndex + which (1 oder 2)
+    private boolean draggingBezierCtrl = false;
+    private int bezierSegIndex = -1;
+    private int bezierCtrlWhich = 0; // 1 oder 2
 
     private final JToggleButton connectToggle;
     private final JComboBox<Connection.Style> styleCombo;
@@ -58,15 +60,18 @@ public class BlockDiagramEditor extends JPanel {
     private final JPopupMenu connectionContextMenu;
     private final JMenuItem addHandleItem;
     private final JMenuItem deleteHandleItem;
-    private int contextX;
-    private int contextY;
+    private final JMenuItem segAsLineItem;
+    private final JMenuItem segAsBezierItem;
+    private int contextX, contextY;
     private int contextWaypointIndex = -1;
+    private int contextSegmentIndex = -1;
 
     private final DrawingPanel drawingPanel;
 
     private static final int HANDLE_SIZE = 10;
     private static final int HANDLE_HIT = 12;
     private static final int PORT_HIT = 14;
+    private static final int CTRL_HIT = 10;
 
     public BlockDiagramEditor() {
         setLayout(new BorderLayout());
@@ -80,11 +85,10 @@ public class BlockDiagramEditor extends JPanel {
         addBlockBtn.setToolTipText("Neuen Block hinzufügen");
         addBlockBtn.addActionListener(e -> createBlockAt(80, 80));
         toolbar.add(addBlockBtn);
-
         toolbar.addSeparator();
 
         connectToggle = new JToggleButton(ToolbarIcons.CONNECT);
-        connectToggle.setToolTipText("Verbindungsmodus: Klick Port → (Eckpunkte) → Ziel-Port");
+        connectToggle.setToolTipText("Verbindungsmodus");
         connectToggle.addActionListener(e -> {
             connectMode = connectToggle.isSelected();
             cancelConnecting();
@@ -92,7 +96,6 @@ public class BlockDiagramEditor extends JPanel {
             drawingPanel.repaint();
         });
         toolbar.add(connectToggle);
-
         toolbar.addSeparator();
         toolbar.add(new JLabel(" Stil: "));
         styleCombo = new JComboBox<>(Connection.Style.values());
@@ -126,6 +129,15 @@ public class BlockDiagramEditor extends JPanel {
         connectionContextMenu.add(deleteHandleItem);
 
         connectionContextMenu.addSeparator();
+        segAsLineItem = new JMenuItem("Abschnitt als Linie");
+        segAsLineItem.addActionListener(e -> setContextSegmentKind(SegmentData.Kind.LINE));
+        connectionContextMenu.add(segAsLineItem);
+
+        segAsBezierItem = new JMenuItem("Abschnitt als Bezierkurve");
+        segAsBezierItem.addActionListener(e -> setContextSegmentKind(SegmentData.Kind.BEZIER));
+        connectionContextMenu.add(segAsBezierItem);
+
+        connectionContextMenu.addSeparator();
         JMenuItem deleteConnItem = new JMenuItem("Verbindung löschen");
         deleteConnItem.addActionListener(e -> deleteSelectedConnection());
         connectionContextMenu.add(deleteConnItem);
@@ -146,12 +158,7 @@ public class BlockDiagramEditor extends JPanel {
             @Override
             public void keyPressed(KeyEvent e) {
                 if (e.getKeyCode() == KeyEvent.VK_DELETE || e.getKeyCode() == KeyEvent.VK_BACK_SPACE) {
-                    if (selectedConnection != null && draggingWaypointIndex < 0) {
-                        // Wenn ein Waypoint fokussiert wäre – hier Verbindung löschen
-                        deleteSelectedConnection();
-                    } else {
-                        deleteSelectedConnection();
-                    }
+                    deleteSelectedConnection();
                 } else if (e.getKeyCode() == KeyEvent.VK_ESCAPE) {
                     cancelConnecting();
                     drawingPanel.repaint();
@@ -160,9 +167,31 @@ public class BlockDiagramEditor extends JPanel {
         });
     }
 
+    private void setContextSegmentKind(SegmentData.Kind kind) {
+        if (selectedConnection == null || contextSegmentIndex < 0) return;
+        selectedConnection.setSegmentKind(contextSegmentIndex, kind);
+        if (kind == SegmentData.Kind.BEZIER) {
+            initBezierControls(selectedConnection, contextSegmentIndex);
+        }
+        markDirty();
+        drawingPanel.repaint();
+    }
+
+    private void initBezierControls(Connection conn, int segIdx) {
+        List<int[]> pts = routePoints(conn);
+        if (segIdx < 0 || segIdx >= pts.size() - 1) return;
+        SegmentData seg = conn.getSegment(segIdx);
+        if (seg == null) return;
+        int[] a = pts.get(segIdx);
+        int[] b = pts.get(segIdx + 1);
+        int dx = b[0] - a[0];
+        int dy = b[1] - a[1];
+        seg.setC1(a[0] + dx / 3, a[1] + dy / 3);
+        seg.setC2(a[0] + 2 * dx / 3, a[1] + 2 * dy / 3);
+    }
+
     private void addHandleAtContext() {
         if (selectedConnection == null) return;
-        // Waypoint an Klickposition einfügen (passender Index entlang der Route)
         int insertIdx = findInsertWaypointIndex(selectedConnection, contextX, contextY);
         selectedConnection.insertWaypoint(insertIdx, contextX, contextY);
         markDirty();
@@ -177,7 +206,6 @@ public class BlockDiagramEditor extends JPanel {
         drawingPanel.repaint();
     }
 
-    /** Findet den Waypoint-Insert-Index (0 = vor erstem WP, size = nach letztem). */
     private int findInsertWaypointIndex(Connection conn, int x, int y) {
         List<int[]> pts = routePoints(conn);
         int bestSeg = 0;
@@ -191,10 +219,7 @@ public class BlockDiagramEditor extends JPanel {
                 bestSeg = i;
             }
         }
-        // bestSeg 0 → insert at waypoint index 0
-        // bestSeg k (1..wpCount) → insert at k
-        // bestSeg last → insert at end
-        return bestSeg; // maps directly: after start point = index 0 in waypoints
+        return bestSeg;
     }
 
     private double distanceToSegment(int x1, int y1, int x2, int y2, int px, int py) {
@@ -213,6 +238,7 @@ public class BlockDiagramEditor extends JPanel {
         draggingEndpoint = false;
         draggingSegment = false;
         draggingWaypoint = false;
+        draggingBezierCtrl = false;
     }
 
     private void deleteSelectedConnection() {
@@ -276,11 +302,17 @@ public class BlockDiagramEditor extends JPanel {
     private List<int[]> routePoints(Connection c) {
         List<int[]> pts = new ArrayList<>();
         pts.add(startPoint(c));
-        for (int[] wp : c.getWaypoints()) {
-            pts.add(new int[]{wp[0], wp[1]});
-        }
+        for (int[] wp : c.getWaypoints()) pts.add(new int[]{wp[0], wp[1]});
         pts.add(endPoint(c));
         return pts;
+    }
+
+    private int[] autoBezierControls(int x1, int y1, int x2, int y2) {
+        int dx = x2 - x1, dy = y2 - y1;
+        return new int[]{
+                x1 + dx / 3, y1 + dy / 3,
+                x1 + 2 * dx / 3, y1 + 2 * dy / 3
+        };
     }
 
     private class DrawingPanel extends JPanel {
@@ -300,6 +332,17 @@ public class BlockDiagramEditor extends JPanel {
                     if (diagram == null) return;
 
                     if (selectedConnection != null && !connectMode) {
+                        // Bezier-Kontrollpunkt?
+                        int[] ctrlHit = hitBezierControl(e.getX(), e.getY(), selectedConnection);
+                        if (ctrlHit != null) {
+                            draggingBezierCtrl = true;
+                            bezierSegIndex = ctrlHit[0];
+                            bezierCtrlWhich = ctrlHit[1];
+                            selectedBlock = null;
+                            repaint();
+                            return;
+                        }
+
                         int wpIdx = hitWaypointHandle(e.getX(), e.getY(), selectedConnection);
                         if (wpIdx >= 0) {
                             draggingWaypoint = true;
@@ -331,8 +374,6 @@ public class BlockDiagramEditor extends JPanel {
                             segmentIsHorizontal = a[1] == b[1];
                             segmentLastX = e.getX();
                             segmentLastY = e.getY();
-                            // Sicherstellen, dass beide Segmentenden als Waypoints existieren
-                            ensureSegmentEditable(selectedConnection, seg);
                             selectedBlock = null;
                             repaint();
                             return;
@@ -349,6 +390,7 @@ public class BlockDiagramEditor extends JPanel {
                         selectedConnection = hitConn;
                         selectedBlock = null;
                         styleCombo.setSelectedItem(hitConn.getStyle());
+                        hitConn.ensureSegmentCount();
                         repaint();
                         return;
                     }
@@ -367,6 +409,13 @@ public class BlockDiagramEditor extends JPanel {
                 public void mouseReleased(MouseEvent e) {
                     if (e.isPopupTrigger()) { handlePopup(e); return; }
 
+                    if (draggingBezierCtrl) {
+                        draggingBezierCtrl = false;
+                        bezierSegIndex = -1;
+                        markDirty();
+                        repaint();
+                        return;
+                    }
                     if (draggingWaypoint) {
                         draggingWaypoint = false;
                         draggingWaypointIndex = -1;
@@ -374,7 +423,6 @@ public class BlockDiagramEditor extends JPanel {
                         repaint();
                         return;
                     }
-
                     if (draggingSegment) {
                         draggingSegment = false;
                         draggingSegmentIndex = -1;
@@ -382,7 +430,6 @@ public class BlockDiagramEditor extends JPanel {
                         repaint();
                         return;
                     }
-
                     if (draggingEndpoint && selectedConnection != null) {
                         Object[] portHit = findPortAt(e.getX(), e.getY());
                         if (portHit != null) {
@@ -412,7 +459,6 @@ public class BlockDiagramEditor extends JPanel {
                         repaint();
                         return;
                     }
-
                     if (dragging) {
                         dragging = false;
                         markDirty();
@@ -432,6 +478,15 @@ public class BlockDiagramEditor extends JPanel {
             addMouseMotionListener(new MouseMotionAdapter() {
                 @Override
                 public void mouseDragged(MouseEvent e) {
+                    if (draggingBezierCtrl && selectedConnection != null) {
+                        SegmentData seg = selectedConnection.getSegment(bezierSegIndex);
+                        if (seg != null) {
+                            if (bezierCtrlWhich == 1) seg.setC1(e.getX(), e.getY());
+                            else seg.setC2(e.getX(), e.getY());
+                        }
+                        repaint();
+                        return;
+                    }
                     if (draggingWaypoint && selectedConnection != null
                             && draggingWaypointIndex >= 0
                             && draggingWaypointIndex < selectedConnection.getWaypoints().size()) {
@@ -439,7 +494,6 @@ public class BlockDiagramEditor extends JPanel {
                         repaint();
                         return;
                     }
-
                     if (draggingSegment && selectedConnection != null) {
                         int dx = e.getX() - segmentLastX;
                         int dy = e.getY() - segmentLastY;
@@ -450,21 +504,18 @@ public class BlockDiagramEditor extends JPanel {
                         repaint();
                         return;
                     }
-
                     if (draggingEndpoint) {
                         endpointDragX = e.getX();
                         endpointDragY = e.getY();
                         repaint();
                         return;
                     }
-
                     if (connecting) {
                         tempLineX = e.getX();
                         tempLineY = e.getY();
                         repaint();
                         return;
                     }
-
                     if (selectedBlock != null) {
                         dragging = true;
                         selectedBlock.setX(e.getX() - dragOffsetX);
@@ -484,66 +535,29 @@ public class BlockDiagramEditor extends JPanel {
             });
         }
 
-        /**
-         * Stellt sicher, dass beide Enden des Segments als Waypoints existieren,
-         * damit sie verschoben werden können (Port-Enden bleiben fix).
-         */
-        private void ensureSegmentEditable(Connection conn, int segIndex) {
-            List<int[]> pts = routePoints(conn);
-            if (segIndex < 0 || segIndex >= pts.size() - 1) return;
-
-            // Wenn Segment Start (Port) berührt → ersten Waypoint an Start-Nähe anlegen falls nötig
-            if (segIndex == 0 && conn.getWaypoints().isEmpty()) {
-                int[] s = pts.get(0);
-                int[] e = pts.get(1);
-                conn.addWaypoint((s[0] + e[0]) / 2, (s[1] + e[1]) / 2);
-            } else if (segIndex == 0) {
-                // optional: nichts, Verschieben betrifft nur Waypoints
-            }
-
-            if (segIndex == pts.size() - 2 && conn.getWaypoints().isEmpty()) {
-                int[] s = pts.get(segIndex);
-                int[] e = pts.get(segIndex + 1);
-                conn.addWaypoint((s[0] + e[0]) / 2, (s[1] + e[1]) / 2);
-            }
-        }
-
         private void moveSegment(Connection conn, int segIndex, int dx, int dy,
                                  boolean axisAligned, boolean horizontal) {
-            List<int[]> wps = conn.getWaypoints();
-            if (wps.isEmpty()) {
-                // Keine Waypoints: einen anlegen und bewegen
+            if (conn.getWaypoints().isEmpty()) {
                 int[] s = startPoint(conn);
                 int[] e = endPoint(conn);
                 conn.addWaypoint((s[0] + e[0]) / 2 + dx, (s[1] + e[1]) / 2 + dy);
                 return;
             }
-
-            // route index: 0=start, 1..n=waypoints, n+1=end
-            // Segment segIndex verbindet route[segIndex] -- route[segIndex+1]
-            int wpCount = wps.size();
-
             if (!axisAligned) {
-                // Neigung beibehalten: beide Enden um (dx,dy) verschieben, sofern Waypoints
                 translateRoutePoint(conn, segIndex, dx, dy);
                 translateRoutePoint(conn, segIndex + 1, dx, dy);
             } else if (horizontal) {
-                // nur Y ändern
                 translateRoutePoint(conn, segIndex, 0, dy);
                 translateRoutePoint(conn, segIndex + 1, 0, dy);
             } else {
-                // nur X ändern
                 translateRoutePoint(conn, segIndex, dx, 0);
                 translateRoutePoint(conn, segIndex + 1, dx, 0);
             }
         }
 
         private void translateRoutePoint(Connection conn, int routeIdx, int dx, int dy) {
-            // routeIdx 0 = Start (Port, nicht verschieben → benachbarten WP anlegen/bewegen)
-            // routeIdx size-1 = Ende
             int wpCount = conn.getWaypoints().size();
             int lastRoute = wpCount + 1;
-
             if (routeIdx <= 0) {
                 if (wpCount == 0) {
                     int[] s = startPoint(conn);
@@ -570,15 +584,13 @@ public class BlockDiagramEditor extends JPanel {
 
         private void handleConnectClick(MouseEvent e) {
             Object[] portHit = findPortAt(e.getX(), e.getY());
-
             if (!connecting) {
                 if (portHit != null) {
                     connecting = true;
                     connectionSource = (Block) portHit[0];
                     connectionSourceSide = (Block.PortSide) portHit[1];
                     pendingWaypoints.clear();
-                    tempLineX = e.getX();
-                    tempLineY = e.getY();
+                    tempLineX = e.getX(); tempLineY = e.getY();
                     selectedBlock = connectionSource;
                     selectedConnection = null;
                     repaint();
@@ -589,8 +601,7 @@ public class BlockDiagramEditor extends JPanel {
                         connectionSource = hit;
                         connectionSourceSide = hit.bestSideToward(e.getX(), e.getY());
                         pendingWaypoints.clear();
-                        tempLineX = e.getX();
-                        tempLineY = e.getY();
+                        tempLineX = e.getX(); tempLineY = e.getY();
                         selectedBlock = hit;
                         selectedConnection = null;
                         repaint();
@@ -598,24 +609,20 @@ public class BlockDiagramEditor extends JPanel {
                 }
                 return;
             }
-
             if (portHit != null) {
                 Block target = (Block) portHit[0];
-                Block.PortSide targetSide = (Block.PortSide) portHit[1];
-                if (target != connectionSource) finishConnection(target, targetSide);
+                if (target != connectionSource) {
+                    finishConnection(target, (Block.PortSide) portHit[1]);
+                }
                 return;
             }
-
             Block hit = findBlockAt(e.getX(), e.getY());
             if (hit != null && hit != connectionSource) {
-                Block.PortSide targetSide = hit.bestSideToward(connectionSource.centerX(), connectionSource.centerY());
-                finishConnection(hit, targetSide);
+                finishConnection(hit, hit.bestSideToward(connectionSource.centerX(), connectionSource.centerY()));
                 return;
             }
-
             pendingWaypoints.add(new int[]{e.getX(), e.getY()});
-            tempLineX = e.getX();
-            tempLineY = e.getY();
+            tempLineX = e.getX(); tempLineY = e.getY();
             repaint();
         }
 
@@ -623,11 +630,10 @@ public class BlockDiagramEditor extends JPanel {
             boolean exists = diagram.getConnections().stream()
                     .anyMatch(c -> c.getFrom() == connectionSource && c.getTo() == target);
             if (!exists) {
-                Connection conn = new Connection(
+                diagram.addConnection(new Connection(
                         java.util.UUID.randomUUID().toString(),
                         connectionSource, target, currentStyle,
-                        connectionSourceSide, targetSide, pendingWaypoints);
-                diagram.addConnection(conn);
+                        connectionSourceSide, targetSide, pendingWaypoints));
                 markDirty();
             }
             cancelConnecting();
@@ -640,9 +646,7 @@ public class BlockDiagramEditor extends JPanel {
                 Block b = diagram.getBlocks().get(i);
                 for (Block.PortSide side : Block.PortSide.values()) {
                     int[] p = b.getPortPoint(side);
-                    if (Math.hypot(x - p[0], y - p[1]) <= PORT_HIT) {
-                        return new Object[]{b, side};
-                    }
+                    if (Math.hypot(x - p[0], y - p[1]) <= PORT_HIT) return new Object[]{b, side};
                 }
             }
             return null;
@@ -654,10 +658,7 @@ public class BlockDiagramEditor extends JPanel {
             for (Block.PortSide side : Block.PortSide.values()) {
                 int[] p = block.getPortPoint(side);
                 double d = Math.hypot(x - p[0], y - p[1]);
-                if (d < bestDist) {
-                    bestDist = d;
-                    best = side;
-                }
+                if (d < bestDist) { bestDist = d; best = side; }
             }
             return best;
         }
@@ -679,35 +680,86 @@ public class BlockDiagramEditor extends JPanel {
             return null;
         }
 
+        /** @return int[]{segIndex, ctrlWhich} oder null */
+        private int[] hitBezierControl(int px, int py, Connection conn) {
+            conn.ensureSegmentCount();
+            List<int[]> pts = routePoints(conn);
+            for (int i = 0; i < conn.getSegments().size(); i++) {
+                SegmentData seg = conn.getSegment(i);
+                if (seg == null || seg.getKind() != SegmentData.Kind.BEZIER) continue;
+                int[] ctrls = resolveControls(seg, pts.get(i), pts.get(i + 1));
+                if (Math.hypot(px - ctrls[0], py - ctrls[1]) <= CTRL_HIT) return new int[]{i, 1};
+                if (Math.hypot(px - ctrls[2], py - ctrls[3]) <= CTRL_HIT) return new int[]{i, 2};
+            }
+            return null;
+        }
+
+        private int[] resolveControls(SegmentData seg, int[] a, int[] b) {
+            if (seg.hasControls()) {
+                return new int[]{seg.getC1x(), seg.getC1y(), seg.getC2x(), seg.getC2y()};
+            }
+            return autoBezierControls(a[0], a[1], b[0], b[1]);
+        }
+
         private int hitSegment(int px, int py, Connection conn) {
             List<int[]> pts = routePoints(conn);
+            conn.ensureSegmentCount();
             for (int i = 0; i < pts.size() - 1; i++) {
                 int[] a = pts.get(i);
                 int[] b = pts.get(i + 1);
-                if (distanceToSegment(a[0], a[1], b[0], b[1], px, py) <= HIT_TOLERANCE) return i;
+                SegmentData seg = conn.getSegment(i);
+                if (seg != null && seg.getKind() == SegmentData.Kind.BEZIER) {
+                    int[] c = resolveControls(seg, a, b);
+                    if (distanceToCubic(a[0], a[1], c[0], c[1], c[2], c[3], b[0], b[1], px, py) <= HIT_TOLERANCE)
+                        return i;
+                } else if (distanceToSegment(a[0], a[1], b[0], b[1], px, py) <= HIT_TOLERANCE) {
+                    return i;
+                }
             }
             return -1;
+        }
+
+        private double distanceToCubic(int x1, int y1, int cx1, int cy1, int cx2, int cy2,
+                                       int x2, int y2, int px, int py) {
+            double min = Double.MAX_VALUE;
+            double prevX = x1, prevY = y1;
+            for (int i = 1; i <= 24; i++) {
+                double t = i / 24.0;
+                double xt = bezierPoint(x1, cx1, cx2, x2, t);
+                double yt = bezierPoint(y1, cy1, cy2, y2, t);
+                min = Math.min(min, distanceToSegment((int) prevX, (int) prevY, (int) xt, (int) yt, px, py));
+                prevX = xt; prevY = yt;
+            }
+            return min;
+        }
+
+        private double bezierPoint(double p0, double p1, double p2, double p3, double t) {
+            double u = 1 - t;
+            return u*u*u*p0 + 3*u*u*t*p1 + 3*u*t*t*p2 + t*t*t*p3;
         }
 
         private void handlePopup(MouseEvent e) {
             contextX = e.getX();
             contextY = e.getY();
-
             Connection hitConn = findConnectionAt(e.getX(), e.getY());
             if (hitConn != null) {
                 selectedConnection = hitConn;
                 selectedBlock = null;
                 styleCombo.setSelectedItem(hitConn.getStyle());
+                hitConn.ensureSegmentCount();
 
                 contextWaypointIndex = hitWaypointHandle(e.getX(), e.getY(), hitConn);
+                contextSegmentIndex = hitSegment(e.getX(), e.getY(), hitConn);
+
                 deleteHandleItem.setEnabled(contextWaypointIndex >= 0);
-                addHandleItem.setEnabled(true);
+                boolean hasSeg = contextSegmentIndex >= 0;
+                segAsLineItem.setEnabled(hasSeg);
+                segAsBezierItem.setEnabled(hasSeg);
 
                 repaint();
                 connectionContextMenu.show(this, e.getX(), e.getY());
                 return;
             }
-
             contextMenu.show(this, e.getX(), e.getY());
         }
 
@@ -723,44 +775,10 @@ public class BlockDiagramEditor extends JPanel {
         private Connection findConnectionAt(int px, int py) {
             if (diagram == null) return null;
             for (int i = diagram.getConnections().size() - 1; i >= 0; i--) {
-                Connection c = diagram.getConnections().get(i);
-                if (hitsConnection(c, px, py)) return c;
+                if (hitSegment(px, py, diagram.getConnections().get(i)) >= 0)
+                    return diagram.getConnections().get(i);
             }
             return null;
-        }
-
-        private boolean hitsConnection(Connection conn, int px, int py) {
-            List<int[]> pts = routePoints(conn);
-            if (conn.getStyle() == Connection.Style.BEZIER && conn.getWaypoints().isEmpty()) {
-                int[] a = pts.get(0);
-                int[] b = pts.get(pts.size() - 1);
-                return distanceToBezier(a[0], a[1], b[0], b[1], px, py) <= HIT_TOLERANCE;
-            }
-            for (int i = 0; i < pts.size() - 1; i++) {
-                int[] a = pts.get(i);
-                int[] b = pts.get(i + 1);
-                if (distanceToSegment(a[0], a[1], b[0], b[1], px, py) <= HIT_TOLERANCE) return true;
-            }
-            return false;
-        }
-
-        private double distanceToBezier(int x1, int y1, int x2, int y2, int px, int py) {
-            double[] c = bezierControls(x1, y1, x2, y2);
-            double min = Double.MAX_VALUE;
-            double prevX = x1, prevY = y1;
-            for (int i = 1; i <= 20; i++) {
-                double t = i / 20.0;
-                double xt = bezierPoint(x1, c[0], c[2], x2, t);
-                double yt = bezierPoint(y1, c[1], c[3], y2, t);
-                min = Math.min(min, distanceToSegment((int) prevX, (int) prevY, (int) xt, (int) yt, px, py));
-                prevX = xt; prevY = yt;
-            }
-            return min;
-        }
-
-        private double bezierPoint(double p0, double p1, double p2, double p3, double t) {
-            double u = 1 - t;
-            return u*u*u*p0 + 3*u*u*t*p1 + 3*u*t*t*p2 + t*t*t*p3;
         }
 
         @Override
@@ -777,30 +795,23 @@ public class BlockDiagramEditor extends JPanel {
 
             for (Connection conn : diagram.getConnections()) {
                 boolean selected = conn == selectedConnection;
-                if (selected && draggingEndpoint) {
-                    drawConnectionDraggingEndpoint(g2, conn);
-                } else {
-                    drawConnection(g2, conn, selected);
-                }
+                if (selected && draggingEndpoint) drawConnectionDraggingEndpoint(g2, conn);
+                else drawConnection(g2, conn, selected);
             }
 
             if (connecting && connectionSource != null) {
                 g2.setColor(new Color(30, 120, 200, 200));
                 g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 0,
                         new float[]{8, 6}, 0));
-
                 int[] start = connectionSourceSide != null
                         ? connectionSource.getPortPoint(connectionSourceSide)
                         : connectionSource.getPortPoint(connectionSource.bestSideToward(tempLineX, tempLineY));
-
                 List<int[]> pts = new ArrayList<>();
                 pts.add(start);
                 pts.addAll(pendingWaypoints);
                 pts.add(new int[]{tempLineX, tempLineY});
-
                 for (int i = 0; i < pts.size() - 1; i++) {
-                    int[] a = pts.get(i);
-                    int[] b = pts.get(i + 1);
+                    int[] a = pts.get(i); int[] b = pts.get(i + 1);
                     g2.drawLine(a[0], a[1], b[0], b[1]);
                 }
                 for (int[] wp : pendingWaypoints) {
@@ -815,30 +826,25 @@ public class BlockDiagramEditor extends JPanel {
 
                 g2.setColor(new Color(0, 0, 0, 30));
                 g2.fillRoundRect(block.getX() + 3, block.getY() + 3, block.getWidth(), block.getHeight(), 10, 10);
-
                 g2.setColor(highlight ? new Color(200, 255, 200)
                         : (isSelected ? new Color(180, 210, 255) : new Color(230, 240, 255)));
                 g2.fillRoundRect(block.getX(), block.getY(), block.getWidth(), block.getHeight(), 10, 10);
-
                 g2.setColor(highlight ? new Color(40, 140, 40)
                         : (isSelected ? new Color(30, 90, 180) : new Color(80, 120, 180)));
                 g2.setStroke(new BasicStroke(isSelected || highlight ? 2.5f : 1.5f));
                 g2.drawRoundRect(block.getX(), block.getY(), block.getWidth(), block.getHeight(), 10, 10);
-
                 g2.setColor(Color.BLACK);
                 FontMetrics fm = g2.getFontMetrics();
                 int textX = block.getX() + (block.getWidth() - fm.stringWidth(block.getName())) / 2;
                 int textY = block.getY() + (block.getHeight() + fm.getAscent()) / 2 - 2;
                 g2.drawString(block.getName(), textX, textY);
-
-                if (connectMode || isSelected || draggingEndpoint) {
-                    drawPorts(g2, block);
-                }
+                if (connectMode || isSelected || draggingEndpoint) drawPorts(g2, block);
             }
 
             if (selectedConnection != null && !draggingEndpoint) {
                 drawEndpointHandles(g2, selectedConnection);
                 drawWaypointHandles(g2, selectedConnection);
+                drawBezierControls(g2, selectedConnection);
             }
         }
 
@@ -867,6 +873,44 @@ public class BlockDiagramEditor extends JPanel {
             }
         }
 
+        private void drawBezierControls(Graphics2D g2, Connection conn) {
+            conn.ensureSegmentCount();
+            List<int[]> pts = routePoints(conn);
+            for (int i = 0; i < conn.getSegments().size(); i++) {
+                SegmentData seg = conn.getSegment(i);
+                if (seg == null || seg.getKind() != SegmentData.Kind.BEZIER) continue;
+                int[] a = pts.get(i);
+                int[] b = pts.get(i + 1);
+                int[] c = resolveControls(seg, a, b);
+
+                // Hilfslinien Anker → Kontrollpunkt
+                g2.setColor(new Color(180, 120, 40, 160));
+                g2.setStroke(new BasicStroke(1f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 0,
+                        new float[]{4, 4}, 0));
+                g2.drawLine(a[0], a[1], c[0], c[1]);
+                g2.drawLine(b[0], b[1], c[2], c[3]);
+
+                // Kontrollpunkt-Handles (Rauten)
+                drawCtrlHandle(g2, c[0], c[1]);
+                drawCtrlHandle(g2, c[2], c[3]);
+            }
+        }
+
+        private void drawCtrlHandle(Graphics2D g2, int x, int y) {
+            int s = 5;
+            Path2D diamond = new Path2D.Double();
+            diamond.moveTo(x, y - s);
+            diamond.lineTo(x + s, y);
+            diamond.lineTo(x, y + s);
+            diamond.lineTo(x - s, y);
+            diamond.closePath();
+            g2.setColor(Color.WHITE);
+            g2.fill(diamond);
+            g2.setColor(new Color(200, 120, 20));
+            g2.setStroke(new BasicStroke(1.5f));
+            g2.draw(diamond);
+        }
+
         private void drawHandle(Graphics2D g2, int x, int y, Color color) {
             int r = HANDLE_SIZE / 2;
             g2.setColor(Color.WHITE);
@@ -878,21 +922,28 @@ public class BlockDiagramEditor extends JPanel {
 
         private void drawConnection(Graphics2D g2, Connection conn, boolean selected) {
             List<int[]> pts = routePoints(conn);
+            conn.ensureSegmentCount();
             g2.setColor(selected ? new Color(200, 80, 40) : new Color(60, 60, 60));
             g2.setStroke(new BasicStroke(selected ? 3.2f : 2.2f));
-
-            if (conn.getStyle() == Connection.Style.BEZIER && conn.getWaypoints().isEmpty()) {
-                int[] a = pts.get(0);
-                int[] b = pts.get(pts.size() - 1);
-                drawBezier(g2, a[0], a[1], b[0], b[1]);
-                drawArrowHead(g2, a[0], a[1], b[0], b[1]);
-                return;
-            }
 
             for (int i = 0; i < pts.size() - 1; i++) {
                 int[] a = pts.get(i);
                 int[] b = pts.get(i + 1);
-                g2.drawLine(a[0], a[1], b[0], b[1]);
+                SegmentData seg = conn.getSegment(i);
+                boolean bezier = seg != null && seg.getKind() == SegmentData.Kind.BEZIER;
+                // Globaler BEZIER-Style ohne Waypoints → ganzes Stück als Bezier
+                if (!bezier && conn.getStyle() == Connection.Style.BEZIER
+                        && conn.getWaypoints().isEmpty() && i == 0) {
+                    bezier = true;
+                }
+                if (bezier) {
+                    int[] c = (seg != null && seg.getKind() == SegmentData.Kind.BEZIER)
+                            ? resolveControls(seg, a, b)
+                            : autoBezierControls(a[0], a[1], b[0], b[1]);
+                    g2.draw(new CubicCurve2D.Double(a[0], a[1], c[0], c[1], c[2], c[3], b[0], b[1]));
+                } else {
+                    g2.drawLine(a[0], a[1], b[0], b[1]);
+                }
             }
             int[] lastA = pts.get(pts.size() - 2);
             int[] lastB = pts.get(pts.size() - 1);
@@ -906,27 +957,12 @@ public class BlockDiagramEditor extends JPanel {
             int x1, y1, x2, y2;
             if (draggingWhich == Endpoint.FROM) {
                 x1 = endpointDragX; y1 = endpointDragY;
-                int[] to = endPoint(conn);
-                x2 = to[0]; y2 = to[1];
+                int[] to = endPoint(conn); x2 = to[0]; y2 = to[1];
             } else {
-                int[] from = startPoint(conn);
-                x1 = from[0]; y1 = from[1];
+                int[] from = startPoint(conn); x1 = from[0]; y1 = from[1];
                 x2 = endpointDragX; y2 = endpointDragY;
             }
             g2.drawLine(x1, y1, x2, y2);
-        }
-
-        private double[] bezierControls(int x1, int y1, int x2, int y2) {
-            double dx = x2 - x1, dy = y2 - y1;
-            if (Math.abs(dy) > Math.abs(dx)) {
-                return new double[]{x1, y1 + dy * 0.4, x2, y2 - dy * 0.4};
-            }
-            return new double[]{x1 + dx * 0.4, y1, x2 - dx * 0.4, y2};
-        }
-
-        private void drawBezier(Graphics2D g2, int x1, int y1, int x2, int y2) {
-            double[] c = bezierControls(x1, y1, x2, y2);
-            g2.draw(new CubicCurve2D.Double(x1, y1, c[0], c[1], c[2], c[3], x2, y2));
         }
 
         private void drawArrowHead(Graphics2D g2, int x1, int y1, int x2, int y2) {
