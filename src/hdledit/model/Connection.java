@@ -19,7 +19,6 @@ public class Connection {
     private Block.PortSide fromSide;
     private Block.PortSide toSide;
     private Style style;
-    /** Zwischenpunkte (nur relevant für ORTHOGONAL). */
     private final List<int[]> waypoints = new ArrayList<>();
 
     public Connection(Block from, Block to, Style style) {
@@ -67,10 +66,22 @@ public class Connection {
         waypoints.add(new int[]{x, y});
     }
 
+    public void insertWaypoint(int index, int x, int y) {
+        if (index < 0) index = 0;
+        if (index > waypoints.size()) index = waypoints.size();
+        waypoints.add(index, new int[]{x, y});
+    }
+
     public void setWaypoint(int index, int x, int y) {
         if (index >= 0 && index < waypoints.size()) {
             waypoints.get(index)[0] = x;
             waypoints.get(index)[1] = y;
+        }
+    }
+
+    public void removeWaypoint(int index) {
+        if (index >= 0 && index < waypoints.size()) {
+            waypoints.remove(index);
         }
     }
 }
